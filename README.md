@@ -14,6 +14,12 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
   Forward2me. Add the addresses they gave you (US, UK, ...) and every store abroad is also
   priced through them, each by its own rules: weight-based rates, volumetric weight, handling,
   insurance and service fees, US sales tax at the warehouse's state, and who pays import tax.
+- **Weight and size from the store pages**, cross-checked between stores, with an alert
+  when they're missing or disagree.
+- **Rules that stay current**: taxes and forwarder rates are checked for updates
+  automatically, odd changes wait for your OK, and you can change any of them by hand.
+- **Notifications** by email, Telegram, WhatsApp, ntfy push, webhook or in the app, for the
+  events you pick: buy now, target reached, price drops, upcoming sales, rule changes, and more.
 - **Landed cost**: Israeli import rules by default: 18% VAT above the personal-import
   exemption, customs duty per category above $500, and a courier clearance fee when taxes
   are collected on arrival. Stores that charge VAT at checkout (Amazon, AliExpress) are
@@ -120,8 +126,9 @@ How a forwarded price is built:
 2. **US sales tax** for the warehouse's state. HawkDrop reads the state from your address,
    so `..., New Castle, DE 19720` means 0%. Override with `--sales-tax`,
 3. the forwarder's **rate card**: price for the first weight step plus each extra step,
-   charged on the greater of actual and volumetric weight (L×W×H / 5000). Without `--weight`,
-   a typical weight for the item's category is assumed and flagged,
+   charged on the greater of actual and volumetric weight (L×W×H / 5000). The weight and size
+   come from the store pages (see [Weight and size](#weight-and-size)) or from you. If neither
+   is known, a typical weight for the item's category is assumed and flagged,
 4. **handling, insurance and service fees** as the service charges them,
 5. **Israeli import tax** on goods + shipping, with the same exemptions as direct orders.
    It's paid either through the service (plus its fee) or to the courier (plus its clearance fee).
@@ -133,6 +140,147 @@ item's edit sheet.
 > The forwarder rates and fees are rough estimates and change often. Check each service's
 > current price list and override them in config.toml (see below). Stores that aren't
 > built in are assumed to ship to you directly unless you set `ships_abroad = false`.
+
+## Weight and size
+
+Forwarders charge by weight, so every `check` also reads the weight and size from each store
+page. It looks at structured product data, spec tables ("Item Weight", "Package Dimensions")
+and Hebrew spec lists ("משקל", "מידות"), in g/kg/lb/oz and cm/mm/inches. Then it compares the
+pages:
+
+| Result | Meaning | What HawkDrop does |
+|---|---|---|
+| verified | two or more pages agree (within 15%) | uses it |
+| unverified | only one page had it | uses it, marked as unverified |
+| conflict | pages disagree | uses the **larger** value, so shipping isn't underestimated, and **alerts you** |
+| missing | no page had it | uses a typical weight for the category and **alerts you** |
+
+Boxed (package/shipping) weights beat product weights. With only a product weight, ~10% plus
+0.1 kg is added for the box. A value you set yourself is never overwritten.
+
+```bash
+hawkdrop specs "WH-1000XM5"                                   # what each page said, and the result
+hawkdrop specs "WH-1000XM5" --source https://maker.example/wh-1000xm5   # cross-check another page
+hawkdrop track "WH-1000XM5" --weight 1.1 --dims 26x22x9       # set it yourself
+```
+
+`check` prints a ⚠ line when the size is missing or disputed, and the `specs_alert`
+notification tells you too. In the web app, the item page has a **Weight & size** card
+showing what each page said.
+
+## Keeping taxes and forwarder rates current
+
+Tax rules and price lists change, so HawkDrop checks for updates:
+
+- **The rules feed.** [`rules/rules.json`](rules/rules.json) in this repository holds the
+  current customs rules and forwarder rates. `hawkdrop serve` checks it every 7 days
+  (`--rules-every DAYS`, 0 = never); `hawkdrop rules check` checks it now. Update that file
+  when rules change, and every install picks it up. Point `[rules] feed_url` at your own
+  copy, or set it to `""` to turn the feed off.
+- **Page sources** you add: an official customs page or a forwarder's price page, read with
+  a regex (one number) or as a weight/price table:
+
+```toml
+[rules.sources.il_exemption]
+url = "https://..."                       # the page with the current exemption
+target = "destination.IL.vat_exempt_usd"
+regex = 'up to \$\s*(\d+)'               # first group = the value
+
+[rules.sources.dealtas_rates]
+url = "https://..."                       # a page with a weight/price table
+target = "forwarders.dealtas.warehouses.US"
+format = "table"                          # sets first, first_kg, step_kg, additional
+```
+
+Every fetched value is checked for range before use. A value that moves more than 50% is held
+for review, and you're notified (`rules_review`). Applied changes are also notified
+(`rules_changed`).
+
+```bash
+hawkdrop rules show                 # values that differ from built-in, and where each comes from
+hawkdrop rules show IL --all        # every Israeli customs value
+hawkdrop rules check                # check the feed and sources now
+hawkdrop rules pending              # changes waiting for you
+hawkdrop rules accept 12            # (or reject 12)
+hawkdrop rules set IL.vat_exempt_usd 150       # manual update
+hawkdrop rules set IL.duty_rates.clothing 12%
+hawkdrop rules set dealtas.US.first 12.5       # forwarder rate (warehouse currency)
+hawkdrop rules unset IL.vat_exempt_usd
+hawkdrop rules history
+```
+
+Precedence, lowest to highest: built-in, fetched, `config.toml`, manual. In the web app,
+**Settings → Taxes & forwarder rates** edits the same values (also offline), shows where
+each comes from, and lists changes to review.
+
+## Notifications
+
+Pick which events you want, and where each one goes:
+
+| Event | When |
+|---|---|
+| `buy_now` | an item's advice changes to buy now |
+| `target_hit` | the best delivered price reaches your target |
+| `price_drop` | the best delivered price drops by 5% or more (`price_drop_pct`) |
+| `sale_soon` | a sales day for your items' stores starts within 3 days (`sale_soon_days`) |
+| `rules_changed` | taxes or forwarder rates were updated automatically |
+| `rules_review` | a fetched change looks odd and needs your OK |
+| `specs_alert` | an item's weight/size is missing or the store pages disagree |
+| `check_failed` | a store's price couldn't be read 3 times in a row (`check_failed_after`) |
+
+Channels are set up in `config.toml`. Secrets can come from environment variables instead,
+named `HAWKDROP_<CHANNEL>_<FIELD>`, e.g. `HAWKDROP_TELEGRAM_BOT_TOKEN` or
+`HAWKDROP_EMAIL_PASSWORD`.
+
+```toml
+[notify]
+app_url = "https://hawkdrop.example.com"    # adds links to messages (optional)
+
+[notify.telegram]        # talk to @BotFather to create a bot, send it a message,
+bot_token = "123:ABC"    # then read chat_id from https://api.telegram.org/bot<token>/getUpdates
+chat_id = "123456789"
+
+[notify.whatsapp]        # free: CallMeBot (get a key: https://www.callmebot.com/blog/free-api-whatsapp-messages/)
+provider = "callmebot"
+phone = "+972501234567"
+apikey = "123456"
+# or Twilio: provider = "twilio", account_sid, auth_token, sender = "+1415...", to = "+9725..."
+
+[notify.email]
+host = "smtp.gmail.com"  # Gmail needs an app password
+port = 587               # 465 = SSL
+username = "me@gmail.com"
+password = "app-password"
+to = "me@gmail.com"      # sender defaults to username
+
+[notify.ntfy]            # free push notifications to the ntfy app (iOS/Android/desktop)
+topic = "hawkdrop-pick-a-long-secret-name"
+# server = "https://ntfy.sh", token = "..." for a private server
+
+[notify.webhook]         # anything else: Slack/Discord-compatible bridges, Home Assistant, n8n ...
+url = "https://..."
+```
+
+```bash
+hawkdrop notify                                  # channels, and which events go where
+hawkdrop notify subscribe buy_now inbox telegram whatsapp
+hawkdrop notify subscribe all inbox ntfy         # every event
+hawkdrop notify subscribe sale_soon              # no channels = off
+hawkdrop notify set price_drop_pct 8
+hawkdrop notify test telegram
+hawkdrop notify inbox                            # read in the terminal
+```
+
+Events are raised after every price check (`check`, the server's scheduled checks, or
+**Check** in the app) and every rules check. Each event is sent once, not repeated at the
+next check. By default events only go to the in-app inbox; you opt in to each channel. You
+can mute a single item in its edit sheet.
+
+In the web app: a bell in the header shows unread notifications, and **Settings →
+Notifications** has the event × channel grid, test buttons and **Alerts on this device**.
+That shows system notifications on your phone or computer while HawkDrop is open or
+recently used. When the app is fully closed, use Telegram, WhatsApp, ntfy or email: web push
+would need extra dependencies.
 
 ## Example advice
 
@@ -280,6 +428,7 @@ environment variable, which wins over the config file.
 | `--check-every` | `HAWKDROP_CHECK_EVERY` | off | hours between automatic price checks; the schedule survives restarts |
 | `--cert` / `--key` | `HAWKDROP_CERT` / `HAWKDROP_KEY` | none | serve HTTPS directly |
 | `--base-path` | `HAWKDROP_BASE_PATH` | none | URL prefix if the proxy doesn't strip it |
+| `--rules-every` | `HAWKDROP_RULES_EVERY` | `7` | days between automatic rules checks (0 = off) |
 | `--db` | `HAWKDROP_DB` | `$HAWKDROP_HOME/hawkdrop.db` | |
 | `--dest` | `HAWKDROP_DEST` | `IL` | destination country for taxes |
 | | `HAWKDROP_HOME` | `~/.hawkdrop` | data + `config.toml` directory |

@@ -113,6 +113,38 @@ def advice(a: Advice) -> dict:
     }
 
 
+def specs(t: Tracker, item: Item) -> dict:
+    found, rows = t.specs(item)
+    return {"status": found.status if rows else None, "messages": found.messages if rows else [],
+            "alert": bool(rows) and found.alert and item.weight_source != "manual",
+            "weight_kg": found.weight_kg, "dims": found.dims_text,
+            "weight_source": item.weight_source, "dims_source": item.dims_source,
+            "observations": [{"source": r["source"], "url": r["url"], "weight_kg": r["weight_kg"], "dims": r["dims"],
+                              "weight_kind": r["weight_kind"], "dims_kind": r["dims_kind"], "seen": r["ts"]}
+                             for r in rows]}
+
+
+def rules_summary(t: Tracker) -> dict:
+    from hawkdrop import rules
+
+    code = t.dest.code
+    values = [{"path": p, "value": v, "from": layer}
+              for p, (v, layer) in sorted(rules.explain(t.db, t.config, code).items())
+              if p.startswith((f"destination.{code}.", "forwarders."))]
+    return {"destination": code, "values": values, "last_check": rules.last_check(t.db),
+            "pending": t.db.rule_changes("pending"), "history": t.db.rule_changes(limit=25)}
+
+
+def notifications(t: Tracker) -> dict:
+    from hawkdrop.notify import EVENTS
+
+    n = t.notifier
+    return {"items": t.db.notifications(50), "unread": len(t.db.notifications(500, unread_only=True)),
+            "events": [{"key": e.key, "title": e.title, "description": e.description} for e in EVENTS.values()],
+            "channels": [{"key": k, "name": c.name, "configured": c.configured} for k, c in n.channels.items()],
+            "subscriptions": n.subscriptions(), "settings": n.settings()}
+
+
 def item_detail(t: Tracker, item: Item, today: date | None = None, history_days: int = 400) -> dict:
     today = today or date.today()
     adv, quotes = t.advise(item, today)
@@ -132,7 +164,8 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
                 windows.append({"name": EVENTS[key].name, "start": s.isoformat(), "end": e.isoformat()})
     return {
         "id": item.id, "name": item.name, "category": item.category, "target_price": item.target_price,
-        "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at,
+        "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at, "muted": item.muted,
+        "specs": specs(t, item),
         "best": quote(quotes[0]) if quotes else None,
         "quotes": [quote(q) for q in quotes],
         "offers": offers,
@@ -152,6 +185,8 @@ def snapshot(t: Tracker, today: date | None = None) -> dict:
         "events": events(today),
         "stores": stores(),
         "forwarders": forwarders(t),
+        "rules": rules_summary(t),
+        "notifications": notifications(t),
     }
 
 

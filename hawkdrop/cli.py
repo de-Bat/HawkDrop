@@ -18,7 +18,7 @@ from hawkdrop.demo import seed_demo
 from hawkdrop.ebay import SITES as EBAY_SITES, search_url
 from hawkdrop.forecast import Advice
 from hawkdrop.forwarders import Forwarder, parse_dims, state_from_address
-from hawkdrop.landed import LandedCost, destination_from_config
+from hawkdrop.landed import LandedCost
 from hawkdrop.stores import STORES
 from hawkdrop.tracker import Quote, Tracker
 
@@ -60,8 +60,33 @@ def _item(tracker: Tracker, ref: str) -> Item:
     return item
 
 
-def _print_check(tracker: Tracker, item: Item):
-    for r in tracker.check(item):
+def _print_specs(tracker: Tracker, item: Item, only_problems: bool = False):
+    found, rows = tracker.specs(item)
+    item = tracker.db.get_item(item.id)
+    if not rows:
+        return
+    manual = item.weight_source == "manual"
+    size = f"{item.weight_kg:g} kg" if item.weight_kg else "weight unknown"
+    if item.dims:
+        size += f", {item.dims} cm"
+    sources = sum(1 for r in rows if r["weight_kg"] or r["dims"])
+    if manual:
+        if not only_problems:
+            print(f"  size: {size} (set by you)")
+        return
+    label = {"verified": f"verified by {sources} store pages", "unverified": "from one store page, not verified",
+             "conflict": "store pages disagree", "missing": "not found on any store page"}[found.status]
+    if found.alert:
+        print(f"  ⚠ size: {size} - {label}")
+        for m in found.messages:
+            print(f"      {m}")
+        print(f"      set it yourself: hawkdrop track {item.name!r} --weight KG --dims LxWxH")
+    elif not only_problems:
+        print(f"  size: {size} ({label})")
+
+
+def _print_check(tracker: Tracker, item: Item, results=None):
+    for r in results if results is not None else tracker.check(item):
         if r.error:
             print(f"  ✗ {r.store.name:<22} {r.error}")
         else:
@@ -97,6 +122,7 @@ def cmd_track(t: Tracker, a):
         print(f"  + {t.store_for(offer).name}: {url}")
     if a.url and not a.no_check:
         _print_check(t, item)
+        _print_specs(t, item)
 
 
 def cmd_add_offer(t: Tracker, a):
@@ -130,14 +156,21 @@ def cmd_price(t: Tracker, a):
 
 def cmd_check(t: Tracker, a):
     items = [_item(t, a.item)] if a.item else t.db.list_items()
+    before = {n["id"] for n in t.db.notifications(200)}
+    results = t.check_and_notify(items)
     for item in items:
         print(f"{item.name}")
-        _print_check(t, item)
+        _print_check(t, item, results[item.id])
+        _print_specs(t, item)
         if item.target_price is not None:
             quotes = t.quotes(item)
             if quotes and quotes[0].landed.total <= item.target_price:
                 print(f"  ★ TARGET HIT: {quotes[0].store.name} "
                       f"{money(quotes[0].landed.total, t.dest.currency)} <= {money(item.target_price)}")
+    new = [n for n in t.db.notifications(200) if n["id"] not in before]
+    for n in reversed(new):
+        sent = [c for c, status in n["deliveries"].items() if status == "sent"]
+        print(f"🔔 {n['title']}" + (f"  (sent: {', '.join(sent)})" if sent else ""))
 
 
 def cmd_list(t: Tracker, a):
@@ -408,6 +441,180 @@ def cmd_forwarder_remove(t: Tracker, a):
     print(f"Removed {n} address{'es' if n != 1 else ''}" if n else "No matching forwarder address.")
 
 
+def cmd_specs(t: Tracker, a):
+    item = _item(t, a.item)
+    for url in a.source or []:
+        try:
+            t.fetch_specs(item, url)
+        except Exception as exc:  # a bad extra page shouldn't hide the rest
+            print(f"  ✗ {url}: {exc}")
+    found, rows = t.specs(item)
+    item = t.db.get_item(item.id)
+    print(f"{item.name} - weight and box size\n")
+    if rows:
+        print(table([[r["source"], f"{r['weight_kg']:g} kg ({r['weight_kind']})" if r["weight_kg"] else "-",
+                      f"{r['dims']} cm ({r['dims_kind']})" if r["dims"] else "-", r["ts"][:10]] for r in rows],
+                    ["page", "weight", "size", "seen"]))
+        print(f"\nConsensus: {found.status}"
+              + (f" - {found.weight_kg:g} kg" if found.weight_kg else "")
+              + (f", {found.dims_text} cm" if found.dims_cm else ""))
+        for m in found.messages:
+            print(f"  • {m}")
+    else:
+        print("No store pages checked yet - run `hawkdrop check` (or add --source URL).")
+    who = {"manual": "set by you", "auto": "from store pages", None: "not set"}
+    print(f"\nUsed for shipping: weight {item.weight_kg or '-'} kg ({who.get(item.weight_source)}), "
+          f"size {item.dims or '-'} cm ({who.get(item.dims_source)})")
+
+
+def cmd_rules_show(t: Tracker, a):
+    from hawkdrop import rules
+
+    rows = []
+    for path, (value, layer) in sorted(rules.explain(t.db, t.config or load_config(), t.dest.code).items()):
+        if not a.all and layer == "builtin":
+            continue
+        if a.filter and a.filter.lower() not in path.lower():
+            continue
+        rows.append([path, value, layer])
+    if rows:
+        print(table(rows, ["rule", "value", "from"]))
+    else:
+        print("All rules are the built-in values." + ("" if a.all else " (--all lists them)"))
+    last = rules.last_check(t.db)
+    if last:
+        print(f"\nLast automatic check: {last['ts'][:16].replace('T', ' ')} UTC - {last['applied']} applied, "
+              f"{last['pending']} to review" + (f", {len(last['errors'])} problems" if last["errors"] else ""))
+    pending = t.db.rule_changes("pending")
+    if pending:
+        print(f"{len(pending)} change(s) waiting for review: `hawkdrop rules pending`")
+
+
+def cmd_rules_check(t: Tracker, a):
+    from hawkdrop import rules
+
+    report = rules.check_updates(t.db, t.config or load_config())
+    for src in report.sources:
+        print(f"  checked {src}")
+    for c in report.applied:
+        print(f"  ✓ {c.path}: {c.old} → {c.new} ({c.source})")
+    for c in report.pending:
+        print(f"  ? #{c.id} {c.path}: {c.old} → {c.new} ({c.source}) - {c.note}")
+    for e in report.errors:
+        print(f"  ✗ {e}")
+    if not (report.applied or report.pending or report.errors):
+        print("  rules are up to date")
+    t.notifier.rules_report(report)
+
+
+def cmd_rules_set(t: Tracker, a):
+    from hawkdrop import rules
+
+    try:
+        paths = rules.set_manual(t.db, {a.path: rules.parse_value(a.value)}, t.forwarders)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    print(f"Set {paths[0]} = {a.value} (your manual rules override fetched and config values)")
+
+
+def cmd_rules_unset(t: Tracker, a):
+    from hawkdrop import rules
+
+    paths = rules.set_manual(t.db, {a.path: None}, t.forwarders)
+    print(f"Removed your value for {paths[0]}")
+
+
+def cmd_rules_pending(t: Tracker, a):
+    pending = t.db.rule_changes("pending")
+    if not pending:
+        print("Nothing to review.")
+        return
+    print(table([[c["id"], c["path"], c["old"], c["new"], c["source"], c["note"]] for c in pending],
+                ["#", "rule", "now", "fetched", "from", "why"]))
+    print("\nhawkdrop rules accept <#>  /  hawkdrop rules reject <#>")
+
+
+def cmd_rules_decide(t: Tracker, a):
+    from hawkdrop import rules
+
+    try:
+        c = rules.decide(t.db, a.id, a.rules_command == "accept")
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    print(f"{'Accepted' if a.rules_command == 'accept' else 'Rejected'} #{c['id']}: {c['path']} = {c['new']}")
+
+
+def cmd_rules_history(t: Tracker, a):
+    rows = [[c["id"], c["ts"][:16].replace("T", " "), c["path"], c["old"], c["new"], c["source"], c["status"]]
+            for c in t.db.rule_changes(limit=a.limit)]
+    print(table(rows, ["#", "when (UTC)", "rule", "old", "new", "from", "status"]) if rows else "No rule changes yet.")
+
+
+def cmd_notify_status(t: Tracker, a):
+    from hawkdrop.notify import EVENTS
+
+    n = t.notifier
+    print("Channels:")
+    for key, ch in n.channels.items():
+        state = "always on" if key == "inbox" else ("configured" if ch.configured else f"not set up ([notify.{key}])")
+        print(f"  {key:<9} {ch.name:<12} {state}")
+    subs = n.subscriptions()
+    print()
+    print(table([[e.key, e.description, ", ".join(subs[e.key]) or "off"] for e in EVENTS.values()],
+                ["event", "when", "sent to"]))
+    print("\nSettings: " + ", ".join(f"{k} = {v:g}" for k, v in n.settings().items()))
+    print("Change with: hawkdrop notify subscribe <event> <channel>...   (e.g. buy_now inbox telegram)")
+
+
+def cmd_notify_subscribe(t: Tracker, a):
+    from hawkdrop.notify import EVENTS
+
+    events = list(EVENTS) if a.event == "all" else [a.event]
+    try:
+        for e in events:
+            t.notifier.subscribe(e, a.channels)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    unconfigured = [c for c in a.channels if not t.notifier.channels[c].configured]
+    print(f"{', '.join(events)} → {', '.join(a.channels) or 'off'}")
+    if unconfigured:
+        print(f"  note: {', '.join(unconfigured)} not configured yet - see [notify.*] in the README")
+
+
+def cmd_notify_set(t: Tracker, a):
+    try:
+        t.notifier.update_settings({a.key: a.value})
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    print(f"{a.key} = {a.value:g}")
+
+
+def cmd_notify_test(t: Tracker, a):
+    from hawkdrop.notify import NotifyError
+
+    try:
+        print(f"{a.channel}: {t.notifier.test(a.channel)}")
+    except (NotifyError, ValueError) as exc:
+        raise SystemExit(f"error: {exc}") from None
+
+
+def cmd_notify_inbox(t: Tracker, a):
+    items = t.db.notifications(a.limit, unread_only=not a.all)
+    if not items:
+        print("No new notifications." + ("" if a.all else " (--all shows read ones)"))
+    for n in items:
+        print(f"{'•' if not n['read'] else ' '} {n['ts'][:16].replace('T', ' ')}  {n['title']}")
+        if n["body"]:
+            print("    " + n["body"].replace("\n", "\n    "))
+    if not a.keep:
+        t.db.mark_read([n["id"] for n in items])
+
+
+def cmd_notify_run(t: Tracker, a):
+    new = t.notifier.evaluate(t)
+    print(f"{len(new)} new notification(s)")
+
+
 def cmd_remove(t: Tracker, a):
     item = _item(t, a.item)
     t.db.delete_item(item)
@@ -422,7 +629,7 @@ def cmd_serve(t: Tracker, a):
     t.db.close()  # the server opens its own connections
     ctx = ServerContext(t.db.path, cfg, _dest_code(a), bool(a.offline) or None, settings.token,
                         settings.base_path)
-    serve(ctx, settings.host, settings.port, settings.cert, settings.key, settings.check_every)
+    serve(ctx, settings.host, settings.port, settings.cert, settings.key, settings.check_every, settings.rules_every)
 
 
 def cmd_healthcheck(t: Tracker, a):
@@ -534,6 +741,60 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stores", help="built-in store profiles")
     s.set_defaults(func=cmd_stores)
 
+    s = sub.add_parser("specs", help="weight and box size found on the store pages, and whether they agree")
+    s.add_argument("item")
+    s.add_argument("--source", action="append", metavar="URL", help="also read this page (e.g. the manufacturer's)")
+    s.set_defaults(func=cmd_specs)
+
+    s = sub.add_parser("rules", help="tax and forwarder rules: show, check for updates, change")
+    rsub = s.add_subparsers(dest="rules_command", required=True)
+    r = rsub.add_parser("show", help="rules that differ from the built-in values, and where they come from")
+    r.add_argument("filter", nargs="?", help="only rules containing this text, e.g. IL or dealtas")
+    r.add_argument("--all", action="store_true", help="include built-in values")
+    r.set_defaults(func=cmd_rules_show)
+    r = rsub.add_parser("check", help="check the rules feed and your page sources now")
+    r.set_defaults(func=cmd_rules_check)
+    r = rsub.add_parser("set", help="set a rule yourself, e.g. `IL.vat_exempt_usd 150` or `dealtas.US.first 12`")
+    r.add_argument("path")
+    r.add_argument("value")
+    r.set_defaults(func=cmd_rules_set)
+    r = rsub.add_parser("unset", help="remove your own value for a rule")
+    r.add_argument("path")
+    r.set_defaults(func=cmd_rules_unset)
+    r = rsub.add_parser("pending", help="fetched changes waiting for your review")
+    r.set_defaults(func=cmd_rules_pending)
+    for name in ("accept", "reject"):
+        r = rsub.add_parser(name, help=f"{name} a pending change")
+        r.add_argument("id", type=int)
+        r.set_defaults(func=cmd_rules_decide)
+    r = rsub.add_parser("history", help="every rule change, fetched and manual")
+    r.add_argument("--limit", type=int, default=50)
+    r.set_defaults(func=cmd_rules_history)
+
+    s = sub.add_parser("notify", help="notifications: channels, which events go where, inbox")
+    nsub = s.add_subparsers(dest="notify_command")
+    s.set_defaults(func=cmd_notify_status)
+    n = nsub.add_parser("status", help="channels and subscriptions")
+    n.set_defaults(func=cmd_notify_status)
+    n = nsub.add_parser("subscribe", help="send an event to these channels (none = off), e.g. buy_now inbox telegram")
+    n.add_argument("event", help="event key, or 'all'")
+    n.add_argument("channels", nargs="*")
+    n.set_defaults(func=cmd_notify_subscribe)
+    n = nsub.add_parser("set", help="price_drop_pct, sale_soon_days or check_failed_after")
+    n.add_argument("key")
+    n.add_argument("value", type=float)
+    n.set_defaults(func=cmd_notify_set)
+    n = nsub.add_parser("test", help="send a test message")
+    n.add_argument("channel")
+    n.set_defaults(func=cmd_notify_test)
+    n = nsub.add_parser("inbox", help="show new notifications (and mark them read)")
+    n.add_argument("--all", action="store_true")
+    n.add_argument("--keep", action="store_true", help="don't mark them read")
+    n.add_argument("--limit", type=int, default=30)
+    n.set_defaults(func=cmd_notify_inbox)
+    n = nsub.add_parser("run", help="look for new events now (check does this automatically)")
+    n.set_defaults(func=cmd_notify_run)
+
     s = sub.add_parser("forwarders", help="package forwarders (shipping proxies), their rules and your addresses")
     s.set_defaults(func=cmd_forwarders)
 
@@ -564,6 +825,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--key", help="TLS private key (PEM)")
     s.add_argument("--check-every", type=float, metavar="HOURS", help="fetch all prices every N hours")
     s.add_argument("--base-path", help="URL prefix when a reverse proxy doesn't strip it, e.g. /hawkdrop")
+    s.add_argument("--rules-every", type=float, metavar="DAYS", help="check for rule updates every N days "
+                   "(default 7, 0 = never)")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("healthcheck", help="check that the local server is up (for Docker/monitoring)")
@@ -585,12 +848,9 @@ def _dest_code(args) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config()
-    dest_cfg = dict(cfg.destination)
-    if _dest_code(args):
-        dest_cfg = {"code": _dest_code(args)}
     db = Database(db_path(args.db))
     try:
-        tracker = Tracker.from_config(db, FX(db, offline=args.offline or None), destination_from_config(dest_cfg), cfg)
+        tracker = Tracker.from_config(db, FX(db, offline=args.offline or None), cfg, _dest_code(args))
         args.func(tracker, args)
     finally:
         db.close()

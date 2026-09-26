@@ -55,6 +55,51 @@ CREATE TABLE IF NOT EXISTS forwarder_accounts (
     active INTEGER NOT NULL DEFAULT 1,
     UNIQUE (forwarder, warehouse)
 );
+CREATE TABLE IF NOT EXISTS spec_observations (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    weight_kg REAL,
+    dims TEXT,
+    weight_kind TEXT NOT NULL DEFAULT 'item',
+    dims_kind TEXT NOT NULL DEFAULT 'item',
+    ts TEXT NOT NULL,
+    UNIQUE (item_id, url)
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    event TEXT NOT NULL,
+    dedup TEXT UNIQUE,
+    item_id INTEGER,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    read INTEGER NOT NULL DEFAULT 0,
+    deliveries TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+    event TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    PRIMARY KEY (event, channel)
+);
+CREATE TABLE IF NOT EXISTS rule_layers (
+    layer TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rule_changes (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    source TEXT NOT NULL,
+    path TEXT NOT NULL,
+    old TEXT,
+    new TEXT,
+    status TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS fx (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     rates TEXT NOT NULL,
@@ -72,6 +117,10 @@ class Item:
     created_at: str
     weight_kg: float | None = None  # shipping weight, for forwarders' rate cards
     dims: str | None = None  # boxed size "LxWxH" in cm, for volumetric weight
+    weight_source: str | None = None  # "manual" (set by you, never overwritten) or "auto" (from store pages)
+    dims_source: str | None = None
+    specs_status: str | None = None  # last consensus: verified | unverified | conflict | missing
+    muted: bool = False  # no notifications about this item
 
 
 @dataclass
@@ -133,6 +182,10 @@ class Database:
                 self.conn.execute("ALTER TABLE items ADD COLUMN dims TEXT")
             if "local_shipping" not in offer_cols:
                 self.conn.execute("ALTER TABLE offers ADD COLUMN local_shipping REAL")
+            for col, decl in (("weight_source", "TEXT"), ("dims_source", "TEXT"), ("specs_status", "TEXT"),
+                              ("muted", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in item_cols:
+                    self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {decl}")
             # lets offline clients replay queued price entries without creating duplicates
             self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS prices_client_id ON prices (client_id)"
                               " WHERE client_id IS NOT NULL")
@@ -165,19 +218,37 @@ class Database:
         return self.get_item(name)
 
     def update_item(self, item: Item, category: str | None = None, target_price: float | None = None,
-                    weight_kg: float | None = None, dims: str | None = None):
-        """Set the given fields; ``None`` leaves a field unchanged (see ``clear_item_field``)."""
+                    weight_kg: float | None = None, dims: str | None = None, source: str = "manual",
+                    muted: bool | None = None):
+        """Set the given fields; ``None`` leaves a field unchanged (see ``clear_item_field``).
+
+        A weight or size set with ``source="manual"`` is never replaced by values read from store pages.
+        """
         with self.conn:
             for col, value in (("category", category), ("target_price", target_price),
                                ("weight_kg", weight_kg), ("dims", dims)):
                 if value is not None:
                     self.conn.execute(f"UPDATE items SET {col} = ? WHERE id = ?", (value, item.id))
+            if weight_kg is not None:
+                self.conn.execute("UPDATE items SET weight_source = ? WHERE id = ?", (source, item.id))
+            if dims is not None:
+                self.conn.execute("UPDATE items SET dims_source = ? WHERE id = ?", (source, item.id))
+            if muted is not None:
+                self.conn.execute("UPDATE items SET muted = ? WHERE id = ?", (int(muted), item.id))
+
+    def set_specs_status(self, item: Item, status: str | None):
+        with self.conn:
+            self.conn.execute("UPDATE items SET specs_status = ? WHERE id = ?", (status, item.id))
 
     def clear_item_field(self, item: Item, col: str):
+        """Clearing a weight/size hands it back to automatic detection."""
         if col not in ("target_price", "weight_kg", "dims"):
             raise ValueError(col)
+        source_col = {"weight_kg": "weight_source", "dims": "dims_source"}.get(col)
         with self.conn:
             self.conn.execute(f"UPDATE items SET {col} = NULL WHERE id = ?", (item.id,))
+            if source_col:
+                self.conn.execute(f"UPDATE items SET {source_col} = NULL WHERE id = ?", (item.id,))
 
     def get_item(self, ref: str | int) -> Item | None:
         if isinstance(ref, int) or str(ref).isdigit():
@@ -189,10 +260,16 @@ class Database:
                     "SELECT * FROM items WHERE name LIKE ? COLLATE NOCASE", (f"%{ref}%",)
                 ).fetchall()
                 row = rows[0] if len(rows) == 1 else None
-        return Item(**dict(row)) if row else None
+        return self._item(row) if row else None
 
     def list_items(self) -> list[Item]:
-        return [Item(**dict(r)) for r in self.conn.execute("SELECT * FROM items ORDER BY id")]
+        return [self._item(r) for r in self.conn.execute("SELECT * FROM items ORDER BY id")]
+
+    @staticmethod
+    def _item(row) -> Item:
+        d = dict(row)
+        d["muted"] = bool(d.get("muted"))
+        return Item(**d)
 
     def delete_item(self, item: Item):
         with self.conn:
@@ -287,6 +364,103 @@ class Database:
             else:
                 cur = self.conn.execute("DELETE FROM forwarder_accounts WHERE forwarder = ?", (forwarder,))
         return cur.rowcount
+
+    # ---- item specs (weight / size read from store pages) ----------------------------
+    def save_spec_observation(self, item: Item, source: str, url: str, weight_kg: float | None, dims: str | None,
+                              weight_kind: str = "item", dims_kind: str = "item"):
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO spec_observations (item_id, source, url, weight_kg, dims, weight_kind, dims_kind, ts)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (item_id, url) DO UPDATE SET source = excluded.source,
+                     weight_kg = excluded.weight_kg, dims = excluded.dims, weight_kind = excluded.weight_kind,
+                     dims_kind = excluded.dims_kind, ts = excluded.ts""",
+                (item.id, source, url, weight_kg, dims, weight_kind, dims_kind, now_utc().isoformat()),
+            )
+
+    def spec_observations(self, item: Item) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM spec_observations WHERE item_id = ? ORDER BY id", (item.id,))
+        return [dict(r) for r in rows]
+
+    # ---- notifications -------------------------------------------------------------
+    def add_notification(self, event: str, title: str, body: str = "", dedup: str | None = None,
+                         item_id: int | None = None, url: str | None = None) -> int | None:
+        """Returns the new id, or None when ``dedup`` was already notified."""
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO notifications (ts, event, dedup, item_id, title, body, url)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now_utc().isoformat(), event, dedup, item_id, title, body, url),
+            )
+        return cur.lastrowid if cur.rowcount == 1 else None
+
+    def set_deliveries(self, notification_id: int, deliveries: dict):
+        with self.conn:
+            self.conn.execute("UPDATE notifications SET deliveries = ? WHERE id = ?",
+                              (json.dumps(deliveries), notification_id))
+
+    def notifications(self, limit: int = 50, unread_only: bool = False) -> list[dict]:
+        q = "SELECT * FROM notifications" + (" WHERE read = 0" if unread_only else "") + " ORDER BY id DESC LIMIT ?"
+        out = []
+        for r in self.conn.execute(q, (limit,)):
+            d = dict(r)
+            d["read"], d["deliveries"] = bool(d["read"]), json.loads(d["deliveries"] or "{}")
+            out.append(d)
+        return out
+
+    def mark_read(self, ids: list[int] | None = None):
+        with self.conn:
+            if ids is None:
+                self.conn.execute("UPDATE notifications SET read = 1")
+            else:
+                self.conn.executemany("UPDATE notifications SET read = 1 WHERE id = ?", [(i,) for i in ids])
+
+    def subscriptions(self) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for r in self.conn.execute("SELECT event, channel FROM subscriptions"):
+            out.setdefault(r["event"], set()).add(r["channel"])
+        return out
+
+    def set_subscriptions(self, event: str, channels: list[str]):
+        with self.conn:
+            self.conn.execute("DELETE FROM subscriptions WHERE event = ?", (event,))
+            self.conn.executemany("INSERT INTO subscriptions (event, channel) VALUES (?, ?)",
+                                  [(event, c) for c in dict.fromkeys(channels)])
+
+    # ---- rules (taxes, forwarder rates): fetched and manual layers --------------------------
+    def rule_layer(self, layer: str) -> dict:
+        row = self.conn.execute("SELECT data FROM rule_layers WHERE layer = ?", (layer,)).fetchone()
+        return json.loads(row["data"]) if row else {}
+
+    def rule_layer_updated(self, layer: str) -> str | None:
+        row = self.conn.execute("SELECT updated_at FROM rule_layers WHERE layer = ?", (layer,)).fetchone()
+        return row["updated_at"] if row else None
+
+    def save_rule_layer(self, layer: str, data: dict):
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO rule_layers (layer, data, updated_at) VALUES (?, ?, ?)"
+                " ON CONFLICT (layer) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+                (layer, json.dumps(data, sort_keys=True), now_utc().isoformat()),
+            )
+
+    def log_rule_change(self, layer: str, source: str, path: str, old, new, status: str, note: str = "") -> int:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO rule_changes (ts, layer, source, path, old, new, status, note)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (now_utc().isoformat(), layer, source, path, json.dumps(old), json.dumps(new), status, note),
+            )
+        return cur.lastrowid
+
+    def rule_changes(self, status: str | None = None, limit: int = 100) -> list[dict]:
+        q = "SELECT * FROM rule_changes" + (" WHERE status = ?" if status else "") + " ORDER BY id DESC LIMIT ?"
+        rows = self.conn.execute(q, (status, limit) if status else (limit,))
+        return [{**dict(r), "old": json.loads(r["old"]), "new": json.loads(r["new"])} for r in rows]
+
+    def set_rule_change_status(self, change_id: int, status: str):
+        with self.conn:
+            self.conn.execute("UPDATE rule_changes SET status = ? WHERE id = ?", (status, change_id))
 
     # ---- small settings store -------------------------------------------------
     def get_kv(self, key: str) -> str | None:

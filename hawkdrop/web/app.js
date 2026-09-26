@@ -54,6 +54,8 @@ const ICONS = {
   store: '<path d="M4 9.5 5.5 4h13L20 9.5M4 9.5h16v10.5H4zM9 20v-5h6v5"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  bell: '<path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>',
+  box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
 };
 const icon = (name, cls = 'icon') => raw(`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`);
 
@@ -290,6 +292,34 @@ function quotesSection(it) {
   </section>`;
 }
 
+const SPEC_LABEL = {
+  verified: 'verified by several store pages', unverified: 'from one store page, not verified',
+  conflict: 'store pages disagree', missing: 'not found on the store pages',
+};
+
+function specsCard(it) {
+  const sp = it.specs || {};
+  const manual = sp.weight_source === 'manual';
+  const size = `${it.weight_kg != null ? `${it.weight_kg} kg` : 'weight unknown'}${it.dims ? ` · ${it.dims} cm` : ''}`;
+  if (!sp.status && !manual && it.weight_kg == null) {
+    return html`<section class="card specs"><div class="row between"><h3>${icon('box', 'icon inline')} Weight & size</h3>
+      <button type="button" class="link small" data-action="edit-item">set</button></div>
+      <p class="small muted">Read from the store pages on the next price check. Forwarders charge by weight.</p></section>`;
+  }
+  const obs = (sp.observations || []).map((o) => html`<li class="row between small"><span>${o.source}</span>
+      <span class="muted">${o.weight_kg != null ? `${o.weight_kg} kg${o.weight_kind === 'package' ? ' boxed' : ''}` : 'no weight'}${o.dims ? ` · ${o.dims} cm` : ''}</span></li>`);
+  return html`<section class="card specs ${sp.alert ? 'alert' : ''}">
+    <div class="row between"><h3>${icon('box', 'icon inline')} Weight & size</h3><b>${size}</b></div>
+    <p class="small ${sp.alert ? 'warn-text' : 'muted'}">${manual ? 'Set by you.' : (sp.alert ? '⚠ ' : '') + (SPEC_LABEL[sp.status] || '')}${sp.alert ? ' Forwarder prices may be off - please set it yourself.' : ''}</p>
+    ${!manual && sp.messages && sp.messages.length ? html`<ul class="notes small muted">${sp.messages.map((m) => html`<li>${m}</li>`)}</ul>` : ''}
+    ${obs.length ? html`<details class="small"><summary>What each page says (${obs.length})</summary><ul class="plain">${obs}</ul></details>` : ''}
+    <div class="row gap small">
+      <button type="button" class="link" data-action="edit-item">${manual ? 'Change' : 'Set it yourself'}</button>
+      <button type="button" class="link" data-action="specs-source" ${state.online ? '' : 'disabled'}>Cross-check with another page</button>
+    </div>
+  </section>`;
+}
+
 function viewItem(id) {
   const it = state.snapshot.items.find((i) => String(i.id) === String(id));
   if (!it) {
@@ -312,7 +342,23 @@ function viewItem(id) {
     ${adviceHero(it)}
     <section class="card"><h3>Price history</h3>${raw(chart.html)}</section>
     ${salesAhead(it)}
-    ${quotesSection(it)}`;
+    ${quotesSection(it)}
+    ${specsCard(it)}`;
+}
+
+function viewInbox() {
+  const n = state.snapshot.notifications || { items: [] };
+  const rows = n.items.map((x) => html`<li class="card note-item ${x.read ? '' : 'unread'}">
+      <div class="row between"><b>${x.title}</b><span class="small muted">${ago(x.ts)}</span></div>
+      ${x.body ? html`<p class="small pre">${x.body}</p>` : ''}
+      <div class="row gap small">
+        ${x.item_id ? html`<a href="#/item/${x.item_id}">Open item</a>` : ''}
+        ${Object.entries(x.deliveries || {}).map(([ch, st]) => html`<span class="chip ${st === 'sent' ? '' : 'warn'}" title="${st}">${ch}${st === 'sent' ? ' ✓' : ' !'}</span>`)}
+      </div>
+    </li>`);
+  return html`<div class="row between"><h1 class="page-title">Notifications</h1>
+      ${n.unread ? html`<button type="button" class="btn small" data-action="mark-all-read">Mark all read</button>` : ''}</div>
+    ${rows.length ? html`<ul class="plain stack">${rows}</ul>` : html`<p class="muted">Nothing yet. Choose what to be told about in <a href="#/settings">Settings</a>.</p>`}`;
 }
 
 let eventFilter = 'all';
@@ -357,6 +403,80 @@ function viewAdd() {
     </form>`;
 }
 
+function notifyCard() {
+  const n = state.snapshot.notifications;
+  if (!n || !n.events.length) return '';
+  const chans = n.channels;
+  const head = html`<tr><th></th>${chans.map((c) => html`<th title="${c.name}">${c.key === 'inbox' ? 'app' : c.key}</th>`)}</tr>`;
+  const rows = n.events.map((e) => html`<tr><td title="${e.description}"><b>${e.title}</b><div class="small muted desc">${e.description}</div></td>
+      ${chans.map((c) => html`<td><input type="checkbox" name="sub:${e.key}:${c.key}" aria-label="${e.title} by ${c.name}" ${(n.subscriptions[e.key] || []).includes(c.key) ? 'checked' : ''} ${c.configured ? '' : 'data-unconfigured'}></td>`)}</tr>`);
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  return html`<form class="card form" id="notify-form">
+    <h3>Notifications</h3>
+    <p class="small muted">Choose which events reach you, and where. Channels are set up in the server's config.toml (see README).</p>
+    <div class="chips">${chans.map((c) => html`<span class="chip ${c.configured ? 'on' : ''}">${c.name}${c.configured ? ' ✓' : ' – not set up'}${c.configured ? html` <button type="button" class="link small" data-action="test-channel" data-channel="${c.key}">test</button>` : ''}</span>`)}</div>
+    <div class="table-scroll"><table class="grid">${head}${rows}</table></div>
+    <div class="row gap">
+      <label class="grow">Price drop (%)<input name="price_drop_pct" inputmode="decimal" value="${n.settings.price_drop_pct}"></label>
+      <label class="grow">Sale warning (days)<input name="sale_soon_days" inputmode="numeric" value="${n.settings.sale_soon_days}"></label>
+      <label class="grow">Failed checks<input name="check_failed_after" inputmode="numeric" value="${n.settings.check_failed_after}"></label>
+    </div>
+    <button class="btn" type="submit">Save notification settings</button>
+    <p class="small muted">Alerts on this device: ${perm === 'granted' ? 'on ✓ (while the app is open)' : perm === 'unsupported' ? 'not supported by this browser' : html`<button type="button" class="link" data-action="device-alerts">turn on</button>`}</p>
+  </form>`;
+}
+
+const RULE_FIELDS = [
+  ['vat_rate', 'VAT on imports', '%'], ['vat_exempt_usd', 'VAT-free up to', '$'],
+  ['duty_exempt_usd', 'Duty-free up to', '$'], ['clearance_fee', 'Courier clearance fee', ''],
+];
+const LAYER_LABEL = { builtin: 'built-in', fetched: 'updated', config: 'config', manual: 'yours' };
+
+function rulesCard() {
+  const r = state.snapshot.rules;
+  const meta = state.snapshot.meta;
+  if (!r || !meta) return '';
+  const code = r.destination;
+  const val = (path) => r.values.find((v) => v.path === path) || {};
+  const shown = (row, unit) => (row.value == null ? '' : unit === '%' ? +(row.value * 100).toFixed(2) : row.value);
+  const field = (path, label, unit) => {
+    const row = val(path);
+    return html`<label class="grow">${label}${unit === '%' ? ' (%)' : unit === '$' ? ' ($)' : ''} <span class="chip tiny">${LAYER_LABEL[row.from] || ''}</span>
+      <input name="rule:${path}" data-unit="${unit}" inputmode="decimal" value="${shown(row, unit)}" data-orig="${shown(row, unit)}"></label>`;
+  };
+  const duty = r.values.filter((v) => v.path.startsWith(`destination.${code}.duty_rates.`));
+  const fwdKeys = [...new Set(r.values.filter((v) => v.path.startsWith('forwarders.')).map((v) => v.path.split('.')[1]))];
+  const services = (state.snapshot.forwarders && state.snapshot.forwarders.services) || [];
+  const fwdBlocks = fwdKeys.map((k) => {
+    const svc = services.find((x) => x.key === k);
+    const whs = [...new Set(r.values.filter((v) => v.path.startsWith(`forwarders.${k}.warehouses.`)).map((v) => v.path.split('.')[3]))];
+    return html`<details class="small"><summary>${svc ? svc.name : k}</summary>
+      ${whs.map((w) => html`<div class="row gap">${field(`forwarders.${k}.warehouses.${w}.first`, `${w} first ${val(`forwarders.${k}.warehouses.${w}.first_kg`).value} kg`, '')}
+        ${field(`forwarders.${k}.warehouses.${w}.additional`, `each ${val(`forwarders.${k}.warehouses.${w}.step_kg`).value} kg`, '')}</div>`)}
+      <div class="row gap">${field(`forwarders.${k}.handling_fee`, 'Handling', '')}${field(`forwarders.${k}.tax_handling_fee`, 'Tax handling', '')}${field(`forwarders.${k}.service_fee_rate`, 'Service fee', '%')}</div>
+    </details>`;
+  });
+  const pending = (r.pending || []).map((c) => html`<li class="row between"><div><b>${c.path}</b><div class="small muted">${c.old} → ${c.new} · ${c.source}${c.note ? ` · ${c.note}` : ''}</div></div>
+      <div class="row gap"><button type="button" class="btn small" data-action="rule-decide" data-id="${c.id}" data-decision="accept">Accept</button>
+      <button type="button" class="link small danger" data-action="rule-decide" data-id="${c.id}" data-decision="reject">Reject</button></div></li>`);
+  const last = r.last_check;
+  return html`<form class="card form" id="rules-form">
+    <h3>Taxes & forwarder rates</h3>
+    <p class="small muted">Delivered to ${meta.destination.name}. Checked for updates automatically${last ? ` (last ${ago(last.ts)})` : ''}; your changes here override them.</p>
+    ${pending.length ? html`<div class="review"><h4>Changes to review</h4><ul class="plain list">${pending}</ul></div>` : ''}
+    <div class="row gap">${RULE_FIELDS.slice(0, 2).map(([f, l, u]) => field(`destination.${code}.${f}`, l, u))}</div>
+    <div class="row gap">${RULE_FIELDS.slice(2).map(([f, l, u]) => field(`destination.${code}.${f}`, l, u))}</div>
+    <details class="small"><summary>Customs duty by category</summary><div class="row gap wrap">${duty.map((v) => field(v.path, v.path.split('.').pop(), '%'))}</div></details>
+    <details class="small"><summary>Forwarder rates (in each service's currency)</summary>${fwdBlocks}</details>
+    ${last && last.errors && last.errors.length ? html`<p class="small warn-text">Last check: ${last.errors.join('; ')}</p>` : ''}
+    <div class="row gap wrap">
+      <button class="btn" type="submit">Save rules</button>
+      <button class="btn" type="button" data-action="rules-check" ${state.online ? '' : 'disabled'}>${icon('refresh')} Check for updates</button>
+    </div>
+    ${(r.history || []).length ? html`<details class="small"><summary>Recent changes</summary><ul class="plain">${r.history.slice(0, 12).map((c) => html`<li class="small">${ago(c.ts)} · ${c.path}: ${c.old ?? '–'} → ${c.new ?? '–'} <span class="muted">(${c.source}, ${c.status})</span></li>`)}</ul></details>` : ''}
+  </form>`;
+}
+
 function viewSettings() {
   const meta = state.snapshot.meta;
   const d = meta && meta.destination;
@@ -383,14 +503,8 @@ function viewSettings() {
         <input name="token" value="${state.token || ''}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <button class="btn" type="submit">Save token</button>
     </form>
-    ${d ? html`<section class="card"><h3>Taxes & destination</h3>
-      <table class="breakdown">
-        <tr><td>Destination</td><td>${d.name} (${d.currency})</td></tr>
-        <tr><td>VAT on imports</td><td>${pct(d.vat_rate)}</td></tr>
-        <tr><td>VAT-free up to</td><td>$${d.vat_exempt_usd}</td></tr>
-        <tr><td>Duty-free up to</td><td>$${d.duty_exempt_usd}</td></tr>
-        <tr><td>Exchange rates</td><td>${meta.fx_source}</td></tr>
-      </table><p class="small muted">Change these in the server's config.toml.</p></section>` : ''}
+    ${notifyCard()}
+    ${rulesCard()}
     <section class="card">
       <h3>Install on iPhone / iPad</h3>
       <ol class="small"><li>Open HawkDrop in <b>Safari</b> (over HTTPS).</li><li>Tap <b>Share</b> ${icon('share', 'icon inline')}, then <b>Add to Home Screen</b>.</li><li>Open it once while online. After that it works offline.</li></ol>
@@ -414,11 +528,18 @@ const ROUTES = [
   [/^#\/add$/, () => viewAdd(), 'add', false],
   [/^#\/events$/, () => viewEvents(), 'events', true],
   [/^#\/settings$/, () => viewSettings(), 'settings', true],
+  [/^#\/inbox$/, () => viewInbox(), 'inbox', true],
 ];
 
 let lastHash = null;
+function renderBell() {
+  const unread = (state.snapshot.notifications && state.snapshot.notifications.unread) || 0;
+  document.getElementById('bell').innerHTML = str(html`${icon('bell')}${unread ? html`<i class="count">${unread > 9 ? '9+' : unread}</i>` : ''}`);
+}
+
 function render({ force = false } = {}) {
   document.getElementById('status').innerHTML = str(statusPill());
+  renderBell();
   const hash = location.hash || '#/';
   let route = ROUTES[0];
   let match = null;
@@ -437,6 +558,11 @@ function render({ force = false } = {}) {
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   window.scrollTo(0, scroll);
   lastHash = hash;
+  if (tab === 'inbox' && (state.snapshot.notifications || {}).unread && !render.marking) {
+    render.marking = true;  // opening the inbox marks what you see as read
+    const ids = state.snapshot.notifications.items.filter((x) => !x.read).map((x) => x.id);
+    setTimeout(() => mutate({ type: 'read_notifications', body: { ids } }).finally(() => { render.marking = false; }), 1500);
+  }
 }
 
 // ---- actions ---------------------------------------------------------------------------------------
@@ -581,13 +707,14 @@ function editItemSheet(it) {
       <label class="grow">Weight (kg)<input name="weight_kg" inputmode="decimal" value="${it.weight_kg ?? ''}" placeholder="for forwarders"></label>
       <label class="grow">Box size (cm)<input name="dims" value="${it.dims ?? ''}" placeholder="30x20x10" autocapitalize="off"></label>
     </div>
-    <p class="small muted">Weight and size set what package forwarders charge for shipping.</p>`,
+    <p class="small muted">Weight and size set what package forwarders charge for shipping. Leave them empty to read them from the store pages.</p>
+    <label class="check"><input type="checkbox" name="notify" ${it.muted ? '' : 'checked'}> Notifications about this item</label>`,
   async (v) => {
     const dims = v.dims.trim();
     if (dims && !/^\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?$/i.test(dims)) throw new Error('Box size looks like 30x20x10');
     await mutate({ type: 'update_item', itemId: it.id, body: {
       category: v.category, target_price: v.target_price.trim() === '' ? '' : numOrNull(v.target_price),
-      weight_kg: v.weight_kg.trim() === '' ? '' : numOrNull(v.weight_kg), dims } });
+      weight_kg: v.weight_kg.trim() === '' ? '' : numOrNull(v.weight_kg), dims, muted: v.notify !== 'on' } });
   }, { extra: html`<button class="btn danger" type="button" id="del-item">Stop tracking</button>` });
   form.querySelector('#del-item').onclick = async () => {
     if (!confirm(`Stop tracking “${it.name}” and delete its price history?`)) return;
@@ -595,6 +722,19 @@ function editItemSheet(it) {
     await mutate({ type: 'delete_item', itemId: it.id });
     location.hash = '#/';
   };
+}
+
+function specsSourceSheet(it) {
+  openSheet(`Cross-check size · ${it.name}`, html`
+    <label>Another page with the specs <span class="small muted">(manufacturer, another shop…)</span>
+      <input name="url" type="url" required placeholder="https://…" autocapitalize="off"></label>
+    <p class="small muted">HawkDrop reads the weight and size there and compares them with your stores.</p>`,
+  async (v) => {
+    const url = (v.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full link (https://…)');
+    await online('POST', `api/items/${it.id}/specs`, { url });
+    toast('Page checked');
+  }, { submitLabel: 'Check page' });
 }
 
 async function checkPrices(it) {
@@ -621,6 +761,25 @@ async function onClick(ev) {
     case 'edit-item': if (it) editItemSheet(it); break;
     case 'check': if (it) checkPrices(it); break;
     case 'add-forwarder': forwarderSheet(); break;
+    case 'specs-source': if (it) specsSourceSheet(it); break;
+    case 'mark-all-read': await mutate({ type: 'read_notifications', body: {} }); break;
+    case 'test-channel':
+      try { const r = await online('POST', 'api/notify/test', { channel: el.dataset.channel }); toast(`${el.dataset.channel}: ${r.result}`); } catch (e) { toast(`Test failed: ${e.message}`, { timeout: 7000 }); }
+      break;
+    case 'device-alerts':
+      try { const p = await Notification.requestPermission(); toast(p === 'granted' ? 'Alerts on this device are on' : 'Alerts were not allowed'); } catch { toast('This browser does not support alerts'); }
+      render({ force: true });
+      break;
+    case 'rules-check':
+      toast('Checking for rule updates…', { timeout: 2500 });
+      try {
+        const r = await online('POST', 'api/rules/check');
+        toast(`${r.applied} updated, ${r.pending} to review${r.errors.length ? `, ${r.errors.length} problem(s)` : ''}`, { timeout: 6000 });
+      } catch (e) { toast(`Could not check: ${e.message}`); }
+      break;
+    case 'rule-decide':
+      await mutate({ type: 'decide_rule', body: { id: Number(el.dataset.id), decision: el.dataset.decision } });
+      break;
     case 'remove-forwarder':
       if (confirm('Remove this forwarder address?')) await mutate({ type: 'remove_forwarder', body: { forwarder: el.dataset.forwarder, warehouse: el.dataset.warehouse } });
       break;
@@ -664,6 +823,37 @@ async function onSubmit(ev) {
       err.textContent = e.message;
       err.hidden = false;
     }
+  } else if (form.id === 'notify-form') {
+    ev.preventDefault();
+    const n = state.snapshot.notifications;
+    const fd = new FormData(form);
+    const subscriptions = {};
+    for (const e of n.events) subscriptions[e.key] = n.channels.map((c) => c.key).filter((c) => fd.get(`sub:${e.key}:${c}`) === 'on');
+    try {
+      const settings = {};
+      for (const k of ['price_drop_pct', 'sale_soon_days', 'check_failed_after']) {
+        const v = numOrNull(fd.get(k));
+        if (!v || v > 100) throw new Error(`${k.replace(/_/g, ' ')}: enter a number between 1 and 100`);
+        settings[k] = v;
+      }
+      await mutate({ type: 'notify_prefs', body: { subscriptions, settings } });
+      const off = n.channels.filter((c) => !c.configured && n.events.some((e) => subscriptions[e.key].includes(c.key)));
+      toast(off.length ? `Saved. ${off.map((c) => c.name).join(', ')} still need setting up in config.toml.` : 'Notification settings saved', { timeout: 6000 });
+    } catch (e) { toast(e.message); }
+  } else if (form.id === 'rules-form') {
+    ev.preventDefault();
+    const changes = {};
+    try {
+      for (const input of form.querySelectorAll('input[name^="rule:"]')) {
+        if (input.value.trim() === String(input.dataset.orig)) continue;
+        const path = input.name.slice(5);
+        const v = input.value.trim() === '' ? null : numOrNull(input.value);
+        changes[path] = v == null ? null : input.dataset.unit === '%' ? v / 100 : v;
+      }
+    } catch (e) { toast(e.message); return; }
+    if (!Object.keys(changes).length) { toast('Nothing changed'); return; }
+    await mutate({ type: 'set_rules', body: { changes } });
+    toast(`${Object.keys(changes).length} rule(s) saved`);
   } else if (form.id === 'token-form') {
     ev.preventDefault();
     await setToken(new FormData(form).get('token').trim());
@@ -704,13 +894,22 @@ on('change', () => render());
 on('idmap', ({ from, to }) => {
   if (location.hash === `#/item/${from}`) { lastHash = null; location.replace(`#/item/${to}`); }
 });
+on('notifications', (fresh) => {
+  toast(fresh.length === 1 ? `🔔 ${fresh[0].title}` : `🔔 ${fresh.length} new notifications`, { action: 'View', onAction: () => { location.hash = '#/inbox'; } });
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  navigator.serviceWorker?.ready.then((reg) => {
+    for (const n of fresh.slice(0, 3)) reg.showNotification(n.title, { body: n.body, tag: `hawkdrop-${n.id}`, icon: 'icons/icon-192.png', data: { item: n.item_id } });
+  }).catch(() => {});
+});
 on('failed', ({ op, error }) => toast(`Server rejected “${describeOp(op)}”: ${error}`, { timeout: 7000 }));
 window.addEventListener('hashchange', () => render());
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
 setInterval(() => { document.getElementById('status').innerHTML = str(statusPill()); }, 30000);
 
-if (state.snapshot === null) state.snapshot = { items: [], events: [], stores: [], meta: null, forwarders: { services: [], accounts: [] } };
+if (state.snapshot === null) {
+  state.snapshot = { items: [], events: [], stores: [], meta: null, forwarders: { services: [], accounts: [] }, rules: null, notifications: null };
+}
 render({ force: true });
 init();
 registerServiceWorker();

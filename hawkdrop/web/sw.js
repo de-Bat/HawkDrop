@@ -2,7 +2,7 @@
 // Data is stored by the app itself in IndexedDB (see store.js), so API calls
 // always go to the network and the app decides what to do when they fail.
 
-const VERSION = 'hawkdrop-v4';
+const VERSION = 'hawkdrop-v5';
 // works under any prefix (e.g. https://home.example.com/hawkdrop/)
 const API_PREFIX = new URL('api/', self.registration.scope).pathname;
 const SHELL = [
@@ -78,5 +78,18 @@ self.addEventListener('fetch', (event) => {
     }).catch(() => null);
     if (cached) { event.waitUntil(network); return cached; }
     return (await network) || new Response('', { status: 504 });
+  })());
+});
+
+// tapping an alert opens the app (on the item, when there is one)
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const item = event.notification.data && event.notification.data.item;
+  const target = new URL(`./#/${item ? `item/${item}` : 'inbox'}`, self.registration.scope).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const win = wins.find((w) => w.url.startsWith(self.registration.scope));
+    if (win) { await win.focus(); return win.navigate(target); }
+    return self.clients.openWindow(target);
   })());
 });

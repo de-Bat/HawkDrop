@@ -142,6 +142,38 @@ async function api(method, path, body) {
   await page.getByText('Other ways to get it').first().waitFor();
   await shot('08-routes');
   step('online: forwarder synced, item shows the other routes');
+  await page.getByText('Weight & size').waitFor();
+
+  // 11. change a customs rule and notification preferences offline, then sync
+  await context.setOffline(true);
+  await page.goto(BASE + '/#/settings');
+  await page.locator('input[name="rule:destination.IL.vat_exempt_usd"]').fill('150');
+  await page.getByRole('button', { name: 'Save rules' }).click();
+  await page.locator('input[name="sub:price_drop:telegram"]').check();
+  await page.fill('input[name=price_drop_pct]', '7');
+  await page.getByRole('button', { name: 'Save notification settings' }).click();
+  await page.locator('#status .pill', { hasText: '2 pending' }).waitFor();
+  step('offline: rule change + notification settings queued');
+  await context.setOffline(false);
+  await page.locator('#status .pill', { hasText: 'Synced' }).waitFor({ timeout: 30000 });
+  const rules = await api('GET', '/api/rules');
+  const exempt = rules.values.find((v) => v.path === 'destination.IL.vat_exempt_usd');
+  assert.deepEqual([exempt.value, exempt.from], [150, 'manual']);
+  const prefs = await api('GET', '/api/notifications');
+  assert.deepEqual(prefs.subscriptions.price_drop, ['inbox', 'telegram']);
+  assert.equal(prefs.settings.price_drop_pct, 7);
+  await shot('09-settings-rules');
+  step('online: rule and notification settings saved on the server');
+
+  // 12. a new notification shows on the bell; opening the inbox marks it read
+  await api('POST', '/api/notify/test', { channel: 'inbox' });
+  await page.locator('#status .pill').click();
+  await page.locator('#bell .count').waitFor();
+  await page.locator('#bell').click();
+  await page.getByText('Test notification').waitFor();
+  await shot('10-inbox');
+  await page.waitForFunction(async () => (await (await fetch('api/notifications', { headers: { 'X-HawkDrop-Token': localStorage.getItem('hawkdrop.token') || '' } })).json()).unread === 0, null, { timeout: 15000 });
+  step('inbox: notification shown and marked read');
 
   assert.deepEqual(errors, [], `page errors: ${errors.join('\n')}`);
   console.log('\nALL E2E CHECKS PASSED');

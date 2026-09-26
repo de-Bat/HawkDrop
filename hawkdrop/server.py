@@ -23,13 +23,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
-from hawkdrop import __version__, api
+from hawkdrop import __version__, api, rules
 from hawkdrop.config import Config
 from hawkdrop.currency import FX
 from hawkdrop.db import Database
 from hawkdrop.demo import seed_demo
+from hawkdrop.fetch import FetchError
 from hawkdrop.forwarders import parse_dims
-from hawkdrop.landed import destination_from_config
+from hawkdrop.notify import NotifyError
 from hawkdrop.tracker import Tracker
 
 WEB_ROOT = Path(__file__).parent / "web"
@@ -67,9 +68,7 @@ class ServerContext:
 
     def tracker(self) -> Tracker:
         db = Database(self.db_path)
-        dest_cfg = {"code": self.dest_code} if self.dest_code else dict(self.config.destination)
-        return Tracker.from_config(db, FX(db, offline=self.offline_fx or None), destination_from_config(dest_cfg),
-                                   self.config)
+        return Tracker.from_config(db, FX(db, offline=self.offline_fx or None), self.config, self.dest_code)
 
 
 # ---- request parsing helpers ------------------------------------------------------
@@ -171,7 +170,8 @@ class Api:
                 dims = "x".join(f"{d:g}" for d in parse_dims(dims))
             except ValueError as exc:
                 raise ApiError(400, str(exc)) from None
-        t.db.update_item(item, _str(body, "category"), _num(body, "target_price"), _num(body, "weight_kg"), dims)
+        t.db.update_item(item, _str(body, "category"), _num(body, "target_price"), _num(body, "weight_kg"), dims,
+                         muted=body["muted"] is True if "muted" in body else None)
         for col in ("target_price", "weight_kg", "dims"):
             if col in body and body[col] in (None, ""):
                 t.db.clear_item_field(item, col)
@@ -212,19 +212,103 @@ class Api:
         t.record_price(item, _str(body, "store", required=True), _num(body, "price", required=True),
                        _str(body, "currency"), _num(body, "shipping"), body.get("in_stock", True) is not False,
                        when_d, _str(body, "client_id"))
+        t.notifier.evaluate(t, [item])
         return api.item_detail(t, item)
 
     @staticmethod
     @route("POST", r"/api/items/(\d+)/check")
     def check_item(t, body, query, item_id):
         item = _item(t, item_id)
-        results = api.check_results(t.check(item))
+        results = api.check_results(t.check_and_notify([item])[item.id])
         return {"results": results, "item": api.item_detail(t, item)}
 
     @staticmethod
     @route("POST", r"/api/check")
     def check_all(t, body, query):
-        return {"results": {i.id: api.check_results(t.check(i)) for i in t.db.list_items()}}
+        return {"results": {i: api.check_results(r) for i, r in t.check_and_notify().items()}}
+
+    @staticmethod
+    @route("POST", r"/api/items/(\d+)/specs")
+    def fetch_specs(t, body, query, item_id):
+        item = _item(t, item_id)
+        try:
+            t.fetch_specs(item, _str(body, "url", required=True))
+        except FetchError as exc:
+            raise ApiError(502, str(exc)) from None
+        t.notifier.evaluate(t, [item])
+        return api.item_detail(t, item)
+
+    # ---- rules ----------------------------------------------------------------------------
+    @staticmethod
+    @route("GET", r"/api/rules")
+    def get_rules(t, body, query):
+        return api.rules_summary(t)
+
+    @staticmethod
+    @route("POST", r"/api/rules/check")
+    def check_rules(t, body, query):
+        report = rules.check_updates(t.db, t.config)
+        t.notifier.rules_report(report)
+        return {"applied": len(report.applied), "pending": len(report.pending), "errors": report.errors,
+                "rules": api.rules_summary(t)}
+
+    @staticmethod
+    @route("POST", r"/api/rules/manual")
+    def set_rules(t, body, query):
+        changes = body.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            raise ApiError(400, "'changes' must be an object of {rule: value}")
+        try:
+            rules.set_manual(t.db, changes, t.forwarders)
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
+        return api.rules_summary(t)
+
+    @staticmethod
+    @route("POST", r"/api/rules/changes/(\d+)/(accept|reject)")
+    def decide_rule(t, body, query, change_id, decision):
+        try:
+            rules.decide(t.db, int(change_id), decision == "accept")
+        except ValueError:
+            pass  # already decided (e.g. a replayed offline action)
+        return api.rules_summary(t)
+
+    # ---- notifications -------------------------------------------------------------------------
+    @staticmethod
+    @route("GET", r"/api/notifications")
+    def get_notifications(t, body, query):
+        return api.notifications(t)
+
+    @staticmethod
+    @route("POST", r"/api/notifications/read")
+    def read_notifications(t, body, query):
+        ids = body.get("ids")
+        if ids is not None and not (isinstance(ids, list) and all(isinstance(i, int) for i in ids)):
+            raise ApiError(400, "'ids' must be a list of numbers")
+        t.db.mark_read(ids)
+        return api.notifications(t)
+
+    @staticmethod
+    @route("PUT", r"/api/notify/settings")
+    def notify_settings(t, body, query):
+        try:
+            for event, channels in (body.get("subscriptions") or {}).items():
+                if not isinstance(channels, list):
+                    raise ValueError(f"channels for {event} must be a list")
+                t.notifier.subscribe(event, channels)
+            if body.get("settings"):
+                t.notifier.update_settings(body["settings"])
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
+        return api.notifications(t)
+
+    @staticmethod
+    @route("POST", r"/api/notify/test")
+    def notify_test(t, body, query):
+        try:
+            return {"result": t.notifier.test(_str(body, "channel", required=True))}
+        except (NotifyError, ValueError) as exc:
+            raise ApiError(400, str(exc)) from None
 
     @staticmethod
     @route("GET", r"/api/forwarders")
@@ -276,6 +360,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         self._dispatch("PATCH")
+
+    def do_PUT(self):
+        self._dispatch("PUT")
 
     def do_DELETE(self):
         self._dispatch("DELETE")
@@ -380,28 +467,45 @@ class Handler(BaseHTTPRequestHandler):
 def run_scheduled_check(ctx: ServerContext):
     t = ctx.tracker()
     try:
-        items = t.db.list_items()
-        ok = failed = 0
-        for item in items:
-            for r in t.check(item):
-                ok, failed = (ok + 1, failed) if r.error is None else (ok, failed + 1)
+        results = t.check_and_notify()
+        ok = sum(r.error is None for rs in results.values() for r in rs)
+        failed = sum(r.error is not None for rs in results.values() for r in rs)
         t.db.set_kv("last_auto_check", datetime.now(timezone.utc).isoformat())
-        log(f"scheduled price check: {len(items)} items, {ok} prices updated, {failed} failed")
+        log(f"scheduled price check: {len(results)} items, {ok} prices updated, {failed} failed")
     except Exception:
         traceback.print_exc()
     finally:
         t.db.close()
 
 
-def _next_check_delay(ctx: ServerContext, every: timedelta) -> float:
+def run_rules_check(ctx: ServerContext):
+    t = ctx.tracker()
+    try:
+        report = rules.check_updates(t.db, t.config)
+        t.notifier.rules_report(report)
+        log(f"rules check: {len(report.applied)} updated, {len(report.pending)} to review"
+            + (f", problems: {'; '.join(report.errors)}" if report.errors else ""))
+    except Exception:
+        traceback.print_exc()
+    finally:
+        t.db.close()
+
+
+def _last_rules_check(t) -> str | None:
+    last = rules.last_check(t.db)
+    return last["ts"] if last else None
+
+
+def _next_check_delay(ctx: ServerContext, every: timedelta, last_of=lambda t: t.db.get_kv("last_auto_check"),
+                      first_delay: float = 60.0) -> float:
     """Seconds until the next check, remembering the last run across restarts."""
     t = ctx.tracker()
     try:
-        last = t.db.get_kv("last_auto_check")
+        last = last_of(t)
     finally:
         t.db.close()
     if not last:
-        return 60.0  # first start: give the server a minute, then check
+        return first_delay  # first start: give the server a moment, then check
     due = datetime.fromisoformat(last) + every
     return max(30.0, (due - datetime.now(timezone.utc)).total_seconds())
 
@@ -410,6 +514,12 @@ def _checker_loop(ctx: ServerContext, every_hours: float, stop: threading.Event)
     every = timedelta(hours=every_hours)
     while not stop.wait(_next_check_delay(ctx, every)):
         run_scheduled_check(ctx)
+
+
+def _rules_loop(ctx: ServerContext, every_days: float, stop: threading.Event):
+    every = timedelta(days=every_days)
+    while not stop.wait(_next_check_delay(ctx, every, _last_rules_check, first_delay=120.0)):
+        run_rules_check(ctx)
 
 
 def log(message: str):
@@ -432,11 +542,15 @@ def make_server(ctx: ServerContext, host: str = "127.0.0.1", port: int = 8765, c
 
 
 def serve(ctx: ServerContext, host: str, port: int, certfile: str | None = None, keyfile: str | None = None,
-          check_every_hours: float | None = None):
+          check_every_hours: float | None = None, rules_every_days: float | None = None):
     httpd = make_server(ctx, host, port, certfile, keyfile)
     stop = threading.Event()
     if check_every_hours:
         threading.Thread(target=_checker_loop, args=(ctx, check_every_hours, stop), daemon=True).start()
+    rules_on = rules_every_days and ((ctx.config.rules or {}).get("feed_url", rules.DEFAULT_FEED)
+                                     or (ctx.config.rules or {}).get("sources"))
+    if rules_on:
+        threading.Thread(target=_rules_loop, args=(ctx, rules_every_days, stop), daemon=True).start()
 
     def on_term(signum, frame):  # `docker stop` / systemd send SIGTERM
         raise KeyboardInterrupt
@@ -452,6 +566,8 @@ def serve(ctx: ServerContext, host: str, port: int, certfile: str | None = None,
         log("WARNING: reachable from the network without an access token - set --token / HAWKDROP_TOKEN")
     if check_every_hours:
         log(f"automatic price checks every {check_every_hours:g} h")
+    if rules_on:
+        log(f"checking for tax/forwarder rule updates every {rules_every_days:g} days")
     if public and not certfile:
         log("note: iOS enables offline mode only over HTTPS - put a TLS proxy in front (see README)")
     try:

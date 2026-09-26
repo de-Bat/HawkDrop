@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from hawkdrop.fetch import Extraction, FetchError, extract_price, fetch_html, guess_currency, parse_number
+from hawkdrop.specs import extract_specs, specs_from_pairs
 
 API_ROOT = "https://api.ebay.com"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
@@ -171,9 +172,10 @@ class EbayApi:
         if price is None:
             raise EbayError("eBay API: listing has no fixed price (auction?)")
         status = " ".join(a.get("estimatedAvailabilityStatus", "") for a in data.get("estimatedAvailabilities") or [])
+        aspects = [(a.get("name", ""), a.get("value", "")) for a in data.get("localizedAspects") or []]
         return Extraction(price, currency, "OUT_OF_STOCK" not in status or "IN_STOCK" in status,
                           _shipping(data.get("shippingOptions"), currency), data.get("title"), "ebay-api",
-                          url=data.get("itemWebUrl"))
+                          url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"))
 
     def search(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US") -> Extraction:
         filters = ["buyingOptions:{FIXED_PRICE}"]
@@ -277,6 +279,7 @@ class EbaySource:
                 return parse_search_page(page, currency)
             ex = extract_price(page, url, price_regex)
             ex.currency = ex.currency or currency
+            ex.specs = extract_specs(page)
             return ex
         except FetchError as exc:
             if api_error:

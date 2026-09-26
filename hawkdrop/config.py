@@ -31,6 +31,13 @@ Example::
     [ebay]                           # optional: official API instead of reading pages
     client_id = "..."
     client_secret = "..."
+
+    [rules]                          # automatic tax/forwarder rule updates (hawkdrop/rules.py)
+    feed_url = "..."                 # "" turns the feed off
+
+    [notify.telegram]                # notification channels (hawkdrop/notify.py)
+    bot_token = "..."
+    chat_id = "..."
 """
 
 from __future__ import annotations
@@ -57,6 +64,8 @@ class Config:
     server: dict = field(default_factory=dict)
     forwarders: dict = field(default_factory=dict)
     ebay: dict = field(default_factory=dict)
+    rules: dict = field(default_factory=dict)
+    notify: dict = field(default_factory=dict)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -66,7 +75,8 @@ def load_config(path: Path | None = None) -> Config:
     with open(path, "rb") as f:
         data = tomllib.load(f)
     return Config(data.get("destination", {}), data.get("advisor", {}), data.get("stores", {}),
-                  data.get("server", {}), data.get("forwarders", {}), data.get("ebay", {}))
+                  data.get("server", {}), data.get("forwarders", {}), data.get("ebay", {}), data.get("rules", {}),
+                  data.get("notify", {}))
 
 
 @dataclass
@@ -78,10 +88,11 @@ class ServerSettings:
     cert: str | None = None
     key: str | None = None
     base_path: str = ""
+    rules_every: float | None = 7.0  # days between automatic rules checks
 
 
 _SERVER_TYPES = {"host": str, "port": int, "token": str, "check_every": float, "cert": str, "key": str,
-                 "base_path": str}
+                 "base_path": str, "rules_every": float}
 
 
 def server_settings(cli: dict, cfg: dict, env: dict | None = None) -> ServerSettings:
@@ -105,6 +116,7 @@ def server_settings(cli: dict, cfg: dict, env: dict | None = None) -> ServerSett
                 raise SystemExit(f"error: cannot read token file {token_file}: {exc}") from None
     if values.get("base_path"):
         values["base_path"] = "/" + values["base_path"].strip("/") if values["base_path"].strip("/") else ""
-    if values.get("check_every") is not None and values["check_every"] <= 0:
-        values["check_every"] = None
+    for name in ("check_every", "rules_every"):
+        if values.get(name) is not None and values[name] <= 0:
+            values[name] = None
     return ServerSettings(**values)

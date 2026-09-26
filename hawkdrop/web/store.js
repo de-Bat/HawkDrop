@@ -125,6 +125,10 @@ function requestFor(op) {
     case 'add_price': return ['POST', `api/items/${op.itemId}/prices`, { ...op.body, client_id: op.clientId }];
     case 'save_forwarder': return ['POST', 'api/forwarders/accounts', op.body];
     case 'remove_forwarder': return ['DELETE', `api/forwarders/accounts/${encodeURIComponent(op.body.forwarder)}/${encodeURIComponent(op.body.warehouse)}`];
+    case 'set_rules': return ['POST', 'api/rules/manual', op.body];
+    case 'decide_rule': return ['POST', `api/rules/changes/${op.body.id}/${op.body.decision}`];
+    case 'notify_prefs': return ['PUT', 'api/notify/settings', op.body];
+    case 'read_notifications': return ['POST', 'api/notifications/read', op.body];
     default: throw new Error(`unknown change ${op.type}`);
   }
 }
@@ -140,12 +144,20 @@ export function describeOp(op) {
     case 'add_price': return `Price ${b.price} ${b.currency || ''} at ${hostOf(b.store)}`;
     case 'save_forwarder': return `Set up ${b.forwarder} ${b.warehouse}`;
     case 'remove_forwarder': return `Remove ${b.forwarder} ${b.warehouse}`;
+    case 'set_rules': return `Change ${Object.keys(b.changes || {}).length} rule(s)`;
+    case 'decide_rule': return `${b.decision === 'accept' ? 'Accept' : 'Reject'} rule change #${b.id}`;
+    case 'notify_prefs': return 'Notification settings';
+    case 'read_notifications': return 'Mark notifications read';
     default: return op.type;
   }
 }
 
 function emptySnapshot() {
-  return { generated_at: null, meta: null, items: [], events: [], stores: [], forwarders: { services: [], accounts: [] } };
+  return {
+    generated_at: null, meta: null, items: [], events: [], stores: [], forwarders: { services: [], accounts: [] },
+    rules: { values: [], pending: [], history: [] },
+    notifications: { items: [], unread: 0, events: [], channels: [], subscriptions: {}, settings: {} },
+  };
 }
 
 function applyOp(snap, op) {
@@ -166,6 +178,8 @@ function applyOp(snap, op) {
       if (item) {
         if (b.category) item.category = b.category;
         for (const k of ['target_price', 'weight_kg', 'dims']) if (k in b) item[k] = b[k] === '' ? null : b[k];
+        if ('muted' in b) item.muted = b.muted;
+        if ('weight_kg' in b && item.specs) item.specs.weight_source = b.weight_kg === '' ? null : 'manual';
         item.pending = true;
       }
       break;
@@ -192,6 +206,35 @@ function applyOp(snap, op) {
         const svc = f.services.find((x) => x.key === b.forwarder);
         const wh = svc && svc.warehouses.find((w) => w.code === b.warehouse);
         f.accounts.push({ ...b, forwarder_name: svc ? svc.name : b.forwarder, location: wh ? wh.location : '', pending: true });
+      }
+      break;
+    }
+    case 'set_rules': {
+      const r = (snap.rules ||= { values: [], pending: [], history: [] });
+      for (const [path, value] of Object.entries(b.changes || {})) {
+        const row = r.values.find((v) => v.path === path);
+        if (row && value !== null) Object.assign(row, { value, from: 'manual', pending: true });
+        else if (!row && value !== null) r.values.push({ path, value, from: 'manual', pending: true });
+      }
+      break;
+    }
+    case 'decide_rule':
+      if (snap.rules) snap.rules.pending = snap.rules.pending.filter((c) => c.id !== b.id);
+      break;
+    case 'notify_prefs': {
+      const n = snap.notifications;
+      if (n) {
+        Object.assign(n.subscriptions, b.subscriptions || {});
+        Object.assign(n.settings, b.settings || {});
+      }
+      break;
+    }
+    case 'read_notifications': {
+      const n = snap.notifications;
+      if (n) {
+        const hit = (x) => !b.ids || b.ids.includes(x.id);
+        n.unread = b.ids ? Math.max(0, n.unread - n.items.filter((x) => !x.read && hit(x)).length) : 0;
+        for (const x of n.items) if (hit(x)) x.read = true;
       }
       break;
     }
@@ -272,6 +315,9 @@ export function sync() {
         state.outbox.shift();
       }
       const snap = await api('GET', 'api/snapshot', undefined, { timeout: 60000 });
+      const seen = new Set(((state.base && state.base.notifications && state.base.notifications.items) || []).map((n) => n.id));
+      const fresh = state.base ? ((snap.notifications && snap.notifications.items) || []).filter((n) => !n.read && !seen.has(n.id)) : [];
+      if (fresh.length) emit('notifications', fresh);
       state.base = snap;
       state.lastSync = Date.now();
       state.lastError = null;

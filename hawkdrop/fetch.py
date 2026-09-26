@@ -42,6 +42,7 @@ class Extraction:
     title: str | None = None
     method: str = ""
     url: str | None = None  # the listing actually priced (e.g. the cheapest eBay search result)
+    specs: object | None = None  # hawkdrop.specs.Specs read from the same page, if any
 
 
 def fetch_html(url: str, timeout: float = 20.0) -> str:
@@ -229,4 +230,9 @@ def extract_price(page: str, url: str = "", price_regex: str | None = None) -> E
 
 
 def fetch_price(url: str, price_regex: str | None = None) -> Extraction:
-    return extract_price(fetch_html(url), url, price_regex)
+    from hawkdrop.specs import extract_specs
+
+    page = fetch_html(url)
+    ex = extract_price(page, url, price_regex)
+    ex.specs = extract_specs(page)
+    return ex

@@ -12,6 +12,9 @@ services:
     build: .
     image: hawkdrop:latest
     restart: unless-stopped
+    env_file:   # passes notification secrets etc. from .env (HAWKDROP_TELEGRAM_BOT_TOKEN, ...)
+      - path: .env
+        required: false
     environment:
       HAWKDROP_TOKEN: ${HAWKDROP_TOKEN:?set HAWKDROP_TOKEN in .env}
       HAWKDROP_CHECK_EVERY: ${HAWKDROP_CHECK_EVERY:-6}   # hours between automatic price checks
@@ -20,7 +23,7 @@ services:
       TZ: ${TZ:-Asia/Jerusalem}
     volumes:
       - hawkdrop-data:/data
-      # optional tax/advisor/store overrides:
+      # optional overrides: taxes, stores, forwarders, eBay keys, notification channels:
       # - ./config.toml:/data/config.toml:ro
     ports:
       - "${HAWKDROP_BIND:-0.0.0.0}:${HAWKDROP_PORT:-8765}:8765"

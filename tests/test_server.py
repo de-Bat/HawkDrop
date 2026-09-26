@@ -112,6 +112,45 @@ class ApiTest(ServerTest):
         _, cleared = self.call("PATCH", f"/api/items/{item['id']}", {"weight_kg": ""})
         self.assertIsNone(cleared["weight_kg"])
 
+    def test_rules_endpoints(self):
+        _, summary = self.call("GET", "/api/rules")
+        self.assertEqual(summary["destination"], "IL")
+        self.assertTrue(any(v["path"] == "destination.IL.vat_rate" for v in summary["values"]))
+        status, err = self.call("POST", "/api/rules/manual", {"changes": {"IL.vat_rate": 5}})
+        self.assertEqual(status, 400)
+        _, summary = self.call("POST", "/api/rules/manual", {"changes": {"IL.vat_exempt_usd": 150}})
+        row = next(v for v in summary["values"] if v["path"] == "destination.IL.vat_exempt_usd")
+        self.assertEqual((row["value"], row["from"]), (150, "manual"))
+        _, meta = self.call("GET", "/api/meta")
+        self.assertEqual(meta["destination"]["vat_exempt_usd"], 150)  # used for pricing right away
+        self.assertEqual(self.call("POST", "/api/rules/changes/999/accept")[0], 200)  # replay-safe
+
+    def test_notification_endpoints(self):
+        _, n = self.call("GET", "/api/notifications")
+        self.assertEqual(n["unread"], 0)
+        self.assertIn("telegram", [c["key"] for c in n["channels"]])
+        _, n = self.call("PUT", "/api/notify/settings", {"subscriptions": {"buy_now": ["inbox", "telegram"]},
+                                                         "settings": {"price_drop_pct": 8}})
+        self.assertEqual(n["subscriptions"]["buy_now"], ["inbox", "telegram"])
+        self.assertEqual(n["settings"]["price_drop_pct"], 8)
+        self.assertEqual(self.call("PUT", "/api/notify/settings", {"subscriptions": {"x": []}})[0], 400)
+        self.assertEqual(self.call("POST", "/api/notify/test", {"channel": "telegram"})[0], 400)  # not configured
+        self.call("POST", "/api/notify/test", {"channel": "inbox"})
+        _, n = self.call("GET", "/api/notifications")
+        self.assertEqual(n["unread"], 1)
+        _, n = self.call("POST", "/api/notifications/read", {})
+        self.assertEqual(n["unread"], 0)
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertIn("notifications", snap)
+        self.assertIn("rules", snap)
+
+    def test_item_specs_and_mute(self):
+        _, item = self.call("POST", "/api/items", {"name": "Mouse"})
+        self.assertIsNone(item["specs"]["status"])
+        _, item = self.call("PATCH", f"/api/items/{item['id']}", {"muted": True, "weight_kg": 0.2})
+        self.assertTrue(item["muted"])
+        self.assertEqual(item["specs"]["weight_source"], "manual")
+
     def test_demo_has_history_and_windows(self):
         _, item = self.call("POST", "/api/demo")
         self.assertGreater(len(item["history"]), 100)

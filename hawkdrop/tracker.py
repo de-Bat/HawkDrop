@@ -8,10 +8,12 @@ from datetime import date, datetime, timedelta, timezone
 from hawkdrop.currency import FX
 from hawkdrop.db import Database, Item, Offer, PricePoint
 from hawkdrop.ebay import EbaySource, is_ebay
-from hawkdrop.fetch import Extraction, FetchError, fetch_price
+from hawkdrop.fetch import Extraction, FetchError, fetch_html, fetch_price
 from hawkdrop.forecast import Advice, Settings, advise
-from hawkdrop.forwarders import FORWARDERS, Account, Forwarder, Route, forwarders_from_config, parse_dims
+from hawkdrop.forwarders import FORWARDERS, Account, Forwarder, Route, parse_dims
 from hawkdrop.landed import Destination, LandedCost, forwarded_cost, landed_cost
+from hawkdrop.notify import Notifier
+from hawkdrop.specs import Consensus, Observation, consensus, extract_specs
 from hawkdrop.stores import StoreProfile, resolve_store, with_overrides
 
 STALE_AFTER_DAYS = 14  # a store's last price is trusted this long when building the daily series
@@ -44,12 +46,30 @@ class Tracker:
         self.forwarders = forwarders if forwarders is not None else dict(FORWARDERS)
         self.ebay = ebay or EbaySource(db=db, dest_code=dest.code)
         self._accounts: list[Account] | None = None
+        self.config = None  # the Config this tracker was built from (from_config)
+        self.notifier = Notifier(db)
 
     @classmethod
-    def from_config(cls, db: Database, fx: FX, dest: Destination, cfg) -> "Tracker":
-        """``cfg`` is a ``hawkdrop.config.Config``."""
-        return cls(db, fx, dest, cls.settings_from(cfg.advisor), cfg.stores, forwarders_from_config(cfg.forwarders),
-                   EbaySource(cfg.ebay, db, dest.code))
+    def from_config(cls, db: Database, fx: FX, cfg, dest_code: str | None = None) -> "Tracker":
+        """``cfg`` is a ``hawkdrop.config.Config``; taxes and forwarders include fetched and manual rules."""
+        from hawkdrop import rules
+
+        dest, forwarders = rules.build(db, cfg, dest_code)
+        t = cls(db, fx, dest, cls.settings_from(cfg.advisor), cfg.stores, forwarders,
+                EbaySource(cfg.ebay, db, dest.code))
+        t.config = cfg
+        t.notifier = Notifier(db, cfg.notify)
+        return t
+
+    def check_and_notify(self, items: list[Item] | None = None) -> dict[int, list[CheckResult]]:
+        """Fetch prices for the items (default: all), then raise any notifications."""
+        items = self.db.list_items() if items is None else items
+        out = {}
+        for item in items:
+            out[item.id] = self.check(item)
+            self.notifier.record_check(self, item, out[item.id])
+        self.notifier.evaluate(self, items)
+        return out
 
     @classmethod
     def settings_from(cls, advisor_cfg: dict) -> Settings:
@@ -134,8 +154,46 @@ class Tracker:
                 continue
             ex.currency = (ex.currency or store.currency).upper()
             self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method)
+            self._save_specs(item, store.name, ex.url or offer.url, ex.specs)
             results.append(CheckResult(offer, store, ex))
+        if any(r.extraction for r in results):
+            self.update_specs(item)
         return results
+
+    # ---- weight / size --------------------------------------------------------------------
+    def _save_specs(self, item: Item, source: str, url: str, specs) -> None:
+        """Record what one page said about the item's size - also when it said nothing."""
+        dims = "x".join(f"{d:g}" for d in specs.dims_cm) if specs and specs.dims_cm else None
+        self.db.save_spec_observation(item, source, url, specs.weight_kg if specs else None, dims,
+                                      specs.weight_kind if specs else "item", specs.dims_kind if specs else "item")
+
+    def specs(self, item: Item) -> tuple[Consensus, list[dict]]:
+        rows = self.db.spec_observations(item)
+        obs = []
+        for r in rows:
+            try:
+                dims = parse_dims(r["dims"])
+            except ValueError:
+                dims = None
+            obs.append(Observation(r["source"], r["url"], r["weight_kg"], dims, r["weight_kind"], r["dims_kind"]))
+        return consensus(obs), rows
+
+    def update_specs(self, item: Item) -> Consensus:
+        """Adopt the store pages' consensus unless you set the weight/size yourself."""
+        found, _ = self.specs(item)
+        item = self.db.get_item(item.id)
+        if found.weight_kg and item.weight_source != "manual":
+            self.db.update_item(item, weight_kg=found.weight_kg, source="auto")
+        if found.dims_cm and item.dims_source != "manual":
+            self.db.update_item(item, dims=found.dims_text, source="auto")
+        self.db.set_specs_status(item, found.status)
+        return found
+
+    def fetch_specs(self, item: Item, url: str) -> Consensus:
+        """Read weight/size from an extra page (e.g. the manufacturer's) to cross-check the stores."""
+        specs = extract_specs(fetch_html(url))
+        self._save_specs(item, resolve_store(url).name, url, specs)
+        return self.update_specs(item)
 
     def record_price(self, item: Item, url_or_store: str, price: float, currency: str | None = None,
                      shipping: float | None = None, in_stock: bool = True, when: date | None = None,

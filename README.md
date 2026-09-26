@@ -354,7 +354,7 @@ services and runs well on a Raspberry Pi, a NAS or a small VPS.
 ### Docker Compose (recommended)
 
 ```bash
-git clone https://github.com/de-Bat/HawkDrop && cd HawkDrop
+git clone https://github.com/de-Bat/HawkSense && cd HawkSense
 cp .env.example .env            # set HAWKSENSE_TOKEN (openssl rand -hex 24)
 docker compose up -d            # http://<server>:8765/?token=<token>
 ```

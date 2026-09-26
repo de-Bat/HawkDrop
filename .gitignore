@@ -5,3 +5,7 @@ build/
 dist/
 .venv/
 *.db
+.env
+secrets/
+*.db-wal
+*.db-shm

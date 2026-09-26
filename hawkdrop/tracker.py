@@ -76,11 +76,12 @@ class Tracker:
         return results
 
     def record_price(self, item: Item, url_or_store: str, price: float, currency: str | None = None,
-                     shipping: float | None = None, in_stock: bool = True, when: date | None = None) -> Offer:
+                     shipping: float | None = None, in_stock: bool = True, when: date | None = None,
+                     client_id: str | None = None) -> Offer:
         store = resolve_store(url_or_store)
         offer = self.db.find_offer(item, store.key) or self.add_offer(item, url_or_store)
         ts = datetime.combine(when, datetime.min.time(), timezone.utc) + timedelta(hours=12) if when else None
-        self.db.add_price(offer, price, (currency or store.currency), shipping, in_stock, "manual", ts)
+        self.db.add_price(offer, price, (currency or store.currency), shipping, in_stock, "manual", ts, client_id)
         return offer
 
     # ---- landed cost -------------------------------------------------------------------

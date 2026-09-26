@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 from hawkdrop import __version__
 from hawkdrop.calendar_events import upcoming_events
-from hawkdrop.config import home, load_config
+from hawkdrop.config import db_path, load_config, server_settings
 from hawkdrop.currency import FX
 from hawkdrop.db import Database, Item
 from hawkdrop.demo import seed_demo
@@ -250,6 +252,44 @@ def cmd_remove(t: Tracker, a):
     print(f"Removed {item.name}")
 
 
+def cmd_serve(t: Tracker, a):
+    from hawkdrop.server import ServerContext, serve
+
+    cfg = load_config()
+    settings = server_settings(vars(a), cfg.server)
+    t.db.close()  # the server opens its own connections
+    ctx = ServerContext(t.db.path, cfg, _dest_code(a), bool(a.offline) or None, settings.token,
+                        settings.base_path)
+    serve(ctx, settings.host, settings.port, settings.cert, settings.key, settings.check_every)
+
+
+def cmd_healthcheck(t: Tracker, a):
+    """Exit 0 if the local server answers /api/health (used by the Docker HEALTHCHECK)."""
+    import ssl
+    import urllib.request
+
+    settings = server_settings({}, load_config().server)
+    scheme = "https" if settings.cert else "http"
+    url = f"{scheme}://127.0.0.1:{settings.port}{settings.base_path}/api/health"
+    ctx = ssl._create_unverified_context() if settings.cert else None  # our own cert, on localhost
+    try:
+        with urllib.request.urlopen(url, timeout=4, context=ctx) as res:
+            ok = json.load(res).get("ok")
+    except Exception as exc:
+        print(f"unhealthy: {exc}")
+        raise SystemExit(1) from None
+    print("ok" if ok else "unhealthy: database check failed")
+    raise SystemExit(0 if ok else 1)
+
+
+def cmd_backup(t: Tracker, a):
+    target = Path(a.path)
+    if target.is_dir() or a.path.endswith("/") or not target.suffix:  # a directory, existing or not
+        target = target / f"hawkdrop-{date.today().isoformat()}.db"
+    t.db.backup(target)
+    print(f"Backed up {len(t.db.list_items())} items to {target}")
+
+
 def cmd_demo(t: Tracker, a):
     item = seed_demo(t.db)
     print(f"Seeded demo item #{item.id}: {item.name}\n")
@@ -328,18 +368,40 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("item")
     s.set_defaults(func=cmd_remove)
 
+    s = sub.add_parser("serve", help="run the web app / PWA (open it on your phone)")
+    s.add_argument("--host", help="default 127.0.0.1; use 0.0.0.0 to reach it from other devices")
+    s.add_argument("--port", type=int, help="default 8765")
+    s.add_argument("--token", help="require this access token (recommended with --host 0.0.0.0)")
+    s.add_argument("--token-file", help="read the access token from a file (e.g. a Docker secret)")
+    s.add_argument("--cert", help="TLS certificate (PEM) - needed for offline mode on iOS")
+    s.add_argument("--key", help="TLS private key (PEM)")
+    s.add_argument("--check-every", type=float, metavar="HOURS", help="fetch all prices every N hours")
+    s.add_argument("--base-path", help="URL prefix when a reverse proxy doesn't strip it, e.g. /hawkdrop")
+    s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("healthcheck", help="check that the local server is up (for Docker/monitoring)")
+    s.set_defaults(func=cmd_healthcheck)
+
+    s = sub.add_parser("backup", help="consistent copy of the database (safe while the server runs)")
+    s.add_argument("path", help="target file, or a directory for hawkdrop-YYYY-MM-DD.db")
+    s.set_defaults(func=cmd_backup)
+
     s = sub.add_parser("demo", help="load a demo item with 14 months of synthetic history")
     s.set_defaults(func=cmd_demo)
     return p
+
+
+def _dest_code(args) -> str | None:
+    return args.dest or os.environ.get("HAWKDROP_DEST") or None
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config()
     dest_cfg = dict(cfg.destination)
-    if args.dest:
-        dest_cfg = {"code": args.dest}
-    db = Database(args.db or home() / "hawkdrop.db")
+    if _dest_code(args):
+        dest_cfg = {"code": _dest_code(args)}
+    db = Database(db_path(args.db))
     try:
         tracker = Tracker(db, FX(db, offline=args.offline or None), destination_from_config(dest_cfg),
                           Tracker.settings_from(cfg.advisor), cfg.stores)

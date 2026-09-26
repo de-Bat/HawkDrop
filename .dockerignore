@@ -1,0 +1,13 @@
+.git
+**/__pycache__
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+secrets/
+tests/
+README.md
+pyproject.toml
+scripts/
+deploy/

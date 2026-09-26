@@ -35,9 +35,14 @@ CREATE TABLE IF NOT EXISTS prices (
     currency TEXT NOT NULL,
     shipping REAL,
     in_stock INTEGER NOT NULL DEFAULT 1,
-    source TEXT NOT NULL DEFAULT 'manual'
+    source TEXT NOT NULL DEFAULT 'manual',
+    client_id TEXT
 );
 CREATE INDEX IF NOT EXISTS prices_offer_ts ON prices (offer_id, ts);
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS fx (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     rates TEXT NOT NULL,
@@ -86,13 +91,43 @@ class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=15)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets the web server, the scheduled checker and CLI commands (e.g. `docker exec
+        # hawkdrop hawkdrop check`) read and write concurrently without "database is locked"
+        if str(self.path) != ":memory:":
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(prices)")}
+        with self.conn:
+            if "client_id" not in cols:
+                self.conn.execute("ALTER TABLE prices ADD COLUMN client_id TEXT")
+            # lets offline clients replay queued price entries without creating duplicates
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS prices_client_id ON prices (client_id)"
+                              " WHERE client_id IS NOT NULL")
 
     def close(self):
         self.conn.close()
+
+    def backup(self, target: str | Path):
+        """Consistent snapshot of the database, safe while other processes are writing."""
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        dst = sqlite3.connect(tmp)
+        try:
+            self.conn.backup(dst)
+        finally:
+            dst.close()
+        tmp.replace(target)
+
+    def healthy(self) -> bool:
+        return self.conn.execute("SELECT 1").fetchone()[0] == 1
 
     # ---- items -------------------------------------------------------------
     def add_item(self, name: str, category: str = "default", target_price: float | None = None) -> Item:
@@ -170,13 +205,17 @@ class Database:
 
     # ---- prices ------------------------------------------------------------
     def add_price(self, offer: Offer, price: float, currency: str, shipping: float | None = None,
-                  in_stock: bool = True, source: str = "manual", ts: datetime | None = None):
+                  in_stock: bool = True, source: str = "manual", ts: datetime | None = None,
+                  client_id: str | None = None) -> bool:
+        """Returns False when ``client_id`` was already recorded (a replayed offline entry)."""
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO prices (offer_id, ts, price, currency, shipping, in_stock, source)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source),
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO prices (offer_id, ts, price, currency, shipping, in_stock, source, client_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source,
+                 client_id),
             )
+        return cur.rowcount == 1
 
     def prices(self, offer: Offer) -> list[PricePoint]:
         rows = self.conn.execute("SELECT * FROM prices WHERE offer_id = ? ORDER BY ts", (offer.id,))
@@ -185,6 +224,16 @@ class Database:
                        bool(r["in_stock"]), r["source"])
             for r in rows
         ]
+
+    # ---- small settings store -------------------------------------------------
+    def get_kv(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_kv(self, key: str, value: str):
+        with self.conn:
+            self.conn.execute("INSERT INTO kv (key, value) VALUES (?, ?)"
+                              " ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---- fx ------------------------------------------------------------------
     def get_fx(self) -> tuple[dict[str, float], datetime] | None:

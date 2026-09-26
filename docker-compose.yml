@@ -1,0 +1,49 @@
+# Self-hosted HawkDrop.
+#
+#   cp .env.example .env        # set HAWKDROP_TOKEN (and HAWKDROP_DOMAIN for HTTPS)
+#   docker compose up -d                     # http://<server>:8765
+#   docker compose --profile https up -d     # + Caddy with automatic HTTPS (needed for iOS offline mode)
+#
+# Data (SQLite) lives in the "hawkdrop-data" volume. Backup:
+#   docker compose exec hawkdrop hawkdrop backup /data/backups
+
+services:
+  hawkdrop:
+    build: .
+    image: hawkdrop:latest
+    restart: unless-stopped
+    environment:
+      HAWKDROP_TOKEN: ${HAWKDROP_TOKEN:?set HAWKDROP_TOKEN in .env}
+      HAWKDROP_CHECK_EVERY: ${HAWKDROP_CHECK_EVERY:-6}   # hours between automatic price checks
+      HAWKDROP_DEST: ${HAWKDROP_DEST:-IL}                 # IL, US, EU or UK
+      HAWKDROP_BASE_PATH: ${HAWKDROP_BASE_PATH:-}
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - hawkdrop-data:/data
+      # optional tax/advisor/store overrides:
+      # - ./config.toml:/data/config.toml:ro
+    ports:
+      - "${HAWKDROP_BIND:-0.0.0.0}:${HAWKDROP_PORT:-8765}:8765"
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      hawkdrop:
+        condition: service_healthy
+    environment:
+      HAWKDROP_DOMAIN: ${HAWKDROP_DOMAIN:-hawkdrop.localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  hawkdrop-data:
+  caddy-data:
+  caddy-config:

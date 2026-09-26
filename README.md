@@ -18,6 +18,7 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
 - **Buy/wait advice with confidence**: a Monte-Carlo model that combines the item's price
   trend and volatility with how likely each upcoming event is to discount it, and by how
   much. It learns from the item's own behaviour in past events.
+- **Web app / iOS PWA** that works fully offline and syncs changes when you're back online.
 - No dependencies. Python 3.11+ and SQLite.
 
 ## Install
@@ -69,6 +70,45 @@ flagged with `?` in `compare`.
      (Singles' Day 11.11), 1,221 ILS (Black Friday / Cyber Monday).
    • This item dropped in 1/1 past Black Friday / Cyber Monday events.
 ```
+
+## Web app and iPhone app (PWA)
+
+```bash
+hawkdrop serve                                    # http://localhost:8765
+hawkdrop serve --host 0.0.0.0 --token MYSECRET --check-every 6   # reachable from your phone
+```
+
+The web client lets you see your items, the buy/wait advice with its confidence, a price
+chart with past sales shaded, the delivered-price breakdown for each store, and the sales
+calendar. From it you can log prices, add stores and track new items.
+
+**Offline.** The app is offline-first:
+
+- A service worker caches the app itself, so it opens with no connection.
+- The last data synced from the server is stored on the device (IndexedDB).
+- While offline you can browse everything, **log prices, add stores, track new items, edit
+  or delete them**. Changes wait in a queue ("2 pending") and are sent when the server is
+  reachable again. Each queued price carries a unique ID, so a retry never records it twice.
+- Only fetching prices from store websites ("Check") and loading the demo need a connection.
+
+**Installing on iPhone / iPad:**
+
+1. Run the server where your phone can reach it, **over HTTPS**. iOS only enables service
+   workers (offline mode) on HTTPS or `localhost`. Some easy ways:
+   - [Tailscale](https://tailscale.com/kb/1312/serve): `tailscale serve 8765` gives you
+     `https://<machine>.<tailnet>.ts.net`;
+   - a Cloudflare Tunnel;
+   - your own certificate: `hawkdrop serve --host 0.0.0.0 --cert cert.pem --key key.pem`.
+     [mkcert](https://github.com/FiloSottile/mkcert) works, but you need to install its root
+     CA on the iPhone.
+2. Open the URL in **Safari** (add `?token=…` if you started the server with `--token`).
+3. Tap **Share → Add to Home Screen**. The home-screen app keeps the token.
+4. Open the app once while online. After that it works offline and syncs when it opens,
+   when it returns to the foreground and when the connection comes back. iOS has no
+   background sync, so syncing only happens while the app is open.
+
+`--check-every HOURS` makes the server fetch every tracked store page on a schedule, so
+prices keep updating while your phone is offline.
 
 ## How the advice works
 
@@ -126,5 +166,14 @@ offline, HawkDrop falls back to built-in approximate rates.
 ## Development
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s tests          # unit + API tests
+
+# browser test of the web app, including full offline use (needs Playwright + Chromium)
+HAWKDROP_HOME=$(mktemp -d) hawkdrop --offline serve --port 8799 &
+HAWKDROP_URL=http://localhost:8799 NODE_PATH=$(npm root -g) node tests/e2e/offline.cjs
+
+python scripts/make_icons.py                  # regenerate the app icons
 ```
+
+When you change files in `hawkdrop/web/`, bump `VERSION` in `sw.js` so installed apps pick
+up the update. They show a "new version ready, Reload" prompt.

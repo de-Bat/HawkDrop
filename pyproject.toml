@@ -15,3 +15,6 @@ hawkdrop = "hawkdrop.cli:main"
 
 [tool.setuptools]
 packages = ["hawkdrop"]
+
+[tool.setuptools.package-data]
+hawkdrop = ["web/*", "web/icons/*"]

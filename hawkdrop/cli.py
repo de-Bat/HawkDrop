@@ -250,6 +250,13 @@ def cmd_remove(t: Tracker, a):
     print(f"Removed {item.name}")
 
 
+def cmd_serve(t: Tracker, a):
+    from hawkdrop.server import ServerContext, serve
+
+    ctx = ServerContext(t.db.path, load_config(), a.dest, bool(a.offline), a.token)
+    serve(ctx, a.host, a.port, a.cert, a.key, a.check_every)
+
+
 def cmd_demo(t: Tracker, a):
     item = seed_demo(t.db)
     print(f"Seeded demo item #{item.id}: {item.name}\n")
@@ -327,6 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("remove", help="stop tracking an item")
     s.add_argument("item")
     s.set_defaults(func=cmd_remove)
+
+    s = sub.add_parser("serve", help="run the web app / PWA (open it on your phone)")
+    s.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from other devices")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--token", help="require this access token (recommended with --host 0.0.0.0)")
+    s.add_argument("--cert", help="TLS certificate (PEM) - needed for offline mode on iOS")
+    s.add_argument("--key", help="TLS private key (PEM)")
+    s.add_argument("--check-every", type=float, metavar="HOURS", help="fetch all prices every N hours")
+    s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("demo", help="load a demo item with 14 months of synthetic history")
     s.set_defaults(func=cmd_demo)

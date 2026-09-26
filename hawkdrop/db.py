@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS prices (
     currency TEXT NOT NULL,
     shipping REAL,
     in_stock INTEGER NOT NULL DEFAULT 1,
-    source TEXT NOT NULL DEFAULT 'manual'
+    source TEXT NOT NULL DEFAULT 'manual',
+    client_id TEXT
 );
 CREATE INDEX IF NOT EXISTS prices_offer_ts ON prices (offer_id, ts);
 CREATE TABLE IF NOT EXISTS fx (
@@ -86,10 +87,20 @@ class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=15)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(prices)")}
+        with self.conn:
+            if "client_id" not in cols:
+                self.conn.execute("ALTER TABLE prices ADD COLUMN client_id TEXT")
+            # lets offline clients replay queued price entries without creating duplicates
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS prices_client_id ON prices (client_id)"
+                              " WHERE client_id IS NOT NULL")
 
     def close(self):
         self.conn.close()
@@ -170,13 +181,17 @@ class Database:
 
     # ---- prices ------------------------------------------------------------
     def add_price(self, offer: Offer, price: float, currency: str, shipping: float | None = None,
-                  in_stock: bool = True, source: str = "manual", ts: datetime | None = None):
+                  in_stock: bool = True, source: str = "manual", ts: datetime | None = None,
+                  client_id: str | None = None) -> bool:
+        """Returns False when ``client_id`` was already recorded (a replayed offline entry)."""
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO prices (offer_id, ts, price, currency, shipping, in_stock, source)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source),
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO prices (offer_id, ts, price, currency, shipping, in_stock, source, client_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source,
+                 client_id),
             )
+        return cur.rowcount == 1
 
     def prices(self, offer: Offer) -> list[PricePoint]:
         rows = self.conn.execute("SELECT * FROM prices WHERE offer_id = ? ORDER BY ts", (offer.id,))

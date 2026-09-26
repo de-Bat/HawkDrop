@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/hawksense-logo.png" alt="HawkSense" width="240"></p>
+<h1 align="center"><img src="assets/hawksense-logo.png" alt="HawkSense" width="320"></h1>
 
-# HawkSense
+<p align="center"><b>Smart price tracker: the real delivered price, and whether to buy now or wait.</b></p>
 
 A smart price tracker for Israeli shoppers (and anyone else). It tracks one item across
 several online stores, local or worldwide, and compares the **real delivered price**:

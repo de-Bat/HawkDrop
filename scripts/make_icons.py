@@ -65,7 +65,7 @@ def main():
     maskable.paste(inner, (51, 51))
     maskable.save(OUT / "icon-maskable-512.png", optimize=True)
     logo = Image.open(SRC).convert("RGB")
-    logo.resize((480, 480), Image.LANCZOS).save(ROOT / "assets" / "hawksense-logo.png", optimize=True)
+    logo.resize((640, 640), Image.LANCZOS).save(ROOT / "assets" / "hawksense-logo.png", optimize=True)  # 2x of the README size
     print(f"wrote icons to {OUT}")
 
 

@@ -66,6 +66,7 @@ class Config:
     ebay: dict = field(default_factory=dict)
     rules: dict = field(default_factory=dict)
     notify: dict = field(default_factory=dict)
+    schedule: dict = field(default_factory=dict)  # set in the app only (hawkdrop.settings)
 
 
 def load_config(path: Path | None = None) -> Config:

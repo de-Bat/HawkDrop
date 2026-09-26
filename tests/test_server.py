@@ -151,6 +151,22 @@ class ApiTest(ServerTest):
         self.assertTrue(item["muted"])
         self.assertEqual(item["specs"]["weight_source"], "manual")
 
+    def test_settings_endpoints(self):
+        _, view = self.call("GET", "/api/settings")
+        self.assertIn("telegram", [s["key"] for s in view["sections"]])
+        status, err = self.call("PUT", "/api/settings", {"changes": {"advisor.max_wait_days": 9999}})
+        self.assertEqual(status, 400)
+        _, view = self.call("PUT", "/api/settings", {"changes": {
+            "destination.code": "US", "notify.telegram.bot_token": "123:secret", "notify.telegram.chat_id": "7"}})
+        self.assertNotIn("123:secret", json.dumps(view))
+        self.assertTrue(next(s for s in view["sections"] if s["key"] == "telegram")["configured"])
+        _, meta = self.call("GET", "/api/meta")
+        self.assertEqual(meta["destination"]["currency"], "USD")  # applies without a restart
+        _, n = self.call("GET", "/api/notifications")
+        self.assertTrue(next(c for c in n["channels"] if c["key"] == "telegram")["configured"])
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertIn("settings", snap)
+
     def test_demo_has_history_and_windows(self):
         _, item = self.call("POST", "/api/demo")
         self.assertGreater(len(item["history"]), 100)

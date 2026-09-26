@@ -116,15 +116,17 @@ async function api(method, path, body) {
   await page.getByText('Black Friday').first().waitFor();
   await shot('05-events');
   await page.goto(BASE + '/#/settings');
-  await page.getByText('Everything is synced.').waitFor();
+  await page.getByText('Package forwarders').waitFor();
   await shot('06-settings');
+  await page.goto(BASE + '/#/settings/device');
+  await page.getByText('Everything is synced.').waitFor();
   await page.goto(BASE + '/#/');
   await shot('07-list');
   step('events + settings render');
 
   // 10. set up a forwarder address offline; once synced, stores abroad are priced through it too
   await context.setOffline(true);
-  await page.goto(BASE + '/#/settings');
+  await page.goto(BASE + '/#/settings/forwarders');
   await page.getByRole('button', { name: /Add a forwarder address/ }).click();
   await page.locator('#fwd-service').selectOption('dealtas');
   await page.fill('textarea[name=address]', 'Test User\n16 Example Rd #IL123\nNew Castle, DE 19720');
@@ -146,9 +148,10 @@ async function api(method, path, body) {
 
   // 11. change a customs rule and notification preferences offline, then sync
   await context.setOffline(true);
-  await page.goto(BASE + '/#/settings');
+  await page.goto(BASE + '/#/settings/rates');
   await page.locator('input[name="rule:destination.IL.vat_exempt_usd"]').fill('150');
   await page.getByRole('button', { name: 'Save rules' }).click();
+  await page.goto(BASE + '/#/settings/notifications');
   await page.locator('input[name="sub:price_drop:telegram"]').check();
   await page.fill('input[name=price_drop_pct]', '7');
   await page.getByRole('button', { name: 'Save notification settings' }).click();
@@ -174,6 +177,47 @@ async function api(method, path, body) {
   await shot('10-inbox');
   await page.waitForFunction(async () => (await (await fetch('api/notifications', { headers: { 'X-HawkDrop-Token': localStorage.getItem('hawkdrop.token') || '' } })).json()).unread === 0, null, { timeout: 15000 });
   step('inbox: notification shown and marked read');
+
+  // 13. configure the server from the app: channel secrets (online only), schedule + store policy (offline ok)
+  await page.goto(BASE + '/#/settings/notifications');
+  await page.locator('details.fold', { hasText: 'Telegram' }).locator('summary').click();
+  const tg = page.locator('form.settings-form[data-section=telegram]');
+  await tg.locator('input[name="set:notify.telegram.bot_token"]').fill('123:TESTTOKEN');
+  await tg.locator('input[name="set:notify.telegram.chat_id"]').fill('42');
+  await tg.getByRole('button', { name: 'Save' }).click();
+  await page.getByText('Settings saved').first().waitFor();
+  let sv = await api('GET', '/api/settings');
+  assert.ok(sv.sections.find((x) => x.key === 'telegram').configured, 'telegram configured from the app');
+  assert.ok(!JSON.stringify(sv).includes('TESTTOKEN'), 'secrets are never sent back');
+  await tg.locator('input[name="set:notify.telegram.bot_token"]').waitFor();
+  assert.match(await page.locator('form.settings-form[data-section=telegram] input[name="set:notify.telegram.bot_token"]').getAttribute('placeholder'), /saved/);
+  step('online: Telegram set up from the app; token not sent back');
+
+  await context.setOffline(true);
+  await page.goto(BASE + '/#/settings/checks');
+  await page.locator('input[name="set:schedule.check_every"]').fill('6');
+  await page.locator('form.settings-form[data-section=checks]').getByRole('button', { name: 'Save' }).click();
+  await page.goto(BASE + '/#/settings/stores');
+  await page.locator('#store-pick').selectOption('amazon_us');
+  await page.locator('input[name="store:shipping_flat"]').fill('15');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.goto(BASE + '/#/settings/notifications');
+  await page.locator('details.fold', { hasText: 'WhatsApp' }).locator('summary').click();
+  await page.locator('input[name="set:notify.whatsapp.apikey"]').fill('k');
+  await page.locator('form.settings-form[data-section=whatsapp]').getByRole('button', { name: 'Save' }).click();
+  await page.getByText('Connect to your HawkDrop server to save passwords').waitFor();
+  await page.locator('#status .pill', { hasText: '2 pending' }).waitFor();
+  step('offline: schedule + store shipping queued; secrets refused while offline');
+  await context.setOffline(false);
+  await page.locator('#status .pill', { hasText: 'Synced' }).waitFor({ timeout: 30000 });
+  sv = await api('GET', '/api/settings');
+  const every = sv.sections.find((x) => x.key === 'checks').fields.find((f) => f.path === 'schedule.check_every');
+  assert.deepEqual([every.value, every.source], [6, 'app']);
+  assert.equal(sv.stores.find((x) => x.key === 'amazon_us').overrides.shipping_flat, 15);
+  await page.goto(BASE + '/#/settings');
+  await page.getByText('Prices every 6 h').waitFor();
+  await shot('11-settings-index');
+  step('online: settings saved on the server and shown in the index');
 
   assert.deepEqual(errors, [], `page errors: ${errors.join('\n')}`);
   console.log('\nALL E2E CHECKS PASSED');

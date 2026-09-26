@@ -129,6 +129,7 @@ function requestFor(op) {
     case 'decide_rule': return ['POST', `api/rules/changes/${op.body.id}/${op.body.decision}`];
     case 'notify_prefs': return ['PUT', 'api/notify/settings', op.body];
     case 'read_notifications': return ['POST', 'api/notifications/read', op.body];
+    case 'save_settings': return ['PUT', 'api/settings', op.body];
     default: throw new Error(`unknown change ${op.type}`);
   }
 }
@@ -148,6 +149,7 @@ export function describeOp(op) {
     case 'decide_rule': return `${b.decision === 'accept' ? 'Accept' : 'Reject'} rule change #${b.id}`;
     case 'notify_prefs': return 'Notification settings';
     case 'read_notifications': return 'Mark notifications read';
+    case 'save_settings': return `Settings: ${Object.keys(b.changes || {}).map((k) => k.split('.').slice(-2).join(' ')).join(', ')}`;
     default: return op.type;
   }
 }
@@ -157,6 +159,7 @@ function emptySnapshot() {
     generated_at: null, meta: null, items: [], events: [], stores: [], forwarders: { services: [], accounts: [] },
     rules: { values: [], pending: [], history: [] },
     notifications: { items: [], unread: 0, events: [], channels: [], subscriptions: {}, settings: {} },
+    settings: null,
   };
 }
 
@@ -235,6 +238,32 @@ function applyOp(snap, op) {
         const hit = (x) => !b.ids || b.ids.includes(x.id);
         n.unread = b.ids ? Math.max(0, n.unread - n.items.filter((x) => !x.read && hit(x)).length) : 0;
         for (const x of n.items) if (hit(x)) x.read = true;
+      }
+      break;
+    }
+    case 'save_settings': {
+      const st = snap.settings;
+      if (!st) break;
+      for (const [path, value] of Object.entries(b.changes || {})) {
+        const f = st.sections.flatMap((x) => x.fields).find((x) => x.path === path);
+        if (f) {
+          if (f.kind === 'secret') f.is_set = value != null;
+          else f.value = value;
+          f.source = value == null ? 'default' : 'app';
+          continue;
+        }
+        const m = path.match(/^stores\.([^.]+(?:\.[^.]+)*)\.(\w+)$/);
+        const store = m && st.stores.find((x) => x.key === m[1]);
+        if (store) {
+          if (value == null) { delete store.overrides[m[2]]; store.app = store.app.filter((k) => k !== m[2]); }
+          else { store.overrides[m[2]] = value; if (!store.app.includes(m[2])) store.app.push(m[2]); }
+          continue;
+        }
+        const src = path.match(/^rules\.sources\.([\w-]+)$/);
+        if (src) {
+          st.rule_sources = st.rule_sources.filter((x) => x.name !== src[1]);
+          if (value) st.rule_sources.push({ name: src[1], ...value, from: 'app' });
+        }
       }
       break;
     }

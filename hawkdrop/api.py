@@ -135,6 +135,13 @@ def rules_summary(t: Tracker) -> dict:
             "pending": t.db.rule_changes("pending"), "history": t.db.rule_changes(limit=25)}
 
 
+def settings_view(t: Tracker) -> dict:
+    from hawkdrop import settings as app_settings
+    from hawkdrop.config import Config
+
+    return app_settings.view(t.db, getattr(t, "file_config", None) or Config(), startup=getattr(t, "startup", None))
+
+
 def notifications(t: Tracker) -> dict:
     from hawkdrop.notify import EVENTS
 
@@ -187,6 +194,7 @@ def snapshot(t: Tracker, today: date | None = None) -> dict:
         "forwarders": forwarders(t),
         "rules": rules_summary(t),
         "notifications": notifications(t),
+        "settings": settings_view(t),
     }
 
 

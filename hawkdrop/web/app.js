@@ -413,7 +413,7 @@ function notifyCard() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   return html`<form class="card form" id="notify-form">
     <h3>Notifications</h3>
-    <p class="small muted">Choose which events reach you, and where. Channels are set up in the server's config.toml (see README).</p>
+    <p class="small muted">Choose which events reach you, and where. Set up the channels below.</p>
     <div class="chips">${chans.map((c) => html`<span class="chip ${c.configured ? 'on' : ''}">${c.name}${c.configured ? ' ✓' : ' – not set up'}${c.configured ? html` <button type="button" class="link small" data-action="test-channel" data-channel="${c.key}">test</button>` : ''}</span>`)}</div>
     <div class="table-scroll"><table class="grid">${head}${rows}</table></div>
     <div class="row gap">
@@ -477,47 +477,232 @@ function rulesCard() {
   </form>`;
 }
 
+// ---- settings pages ---------------------------------------------------------------------------------
+
+const SOURCE_LABEL = { app: 'set here', config: 'config.toml', default: 'default', environment: 'server env' };
+
+function settingsSection(key) {
+  const st = state.snapshot.settings;
+  return st && st.sections.find((x) => x.key === key);
+}
+
+function fieldInput(f) {
+  const name = `set:${f.path}`;
+  const dis = f.locked ? 'disabled' : '';
+  const badge = html`<span class="chip tiny" title="${f.locked ? `Set by ${f.env} on the server` : ''}">${f.locked ? `🔒 ${SOURCE_LABEL.environment}` : SOURCE_LABEL[f.source] || ''}</span>`;
+  const help = f.help ? html`<span class="field-help">${f.help}</span>` : '';
+  if (f.kind === 'bool') {
+    return html`<label class="check"><input type="checkbox" name="${name}" data-kind="bool" data-orig="${f.value ? 'on' : ''}" ${f.value ? 'checked' : ''} ${dis}> ${f.label} ${badge}</label>`;
+  }
+  if (f.kind === 'choice') {
+    return html`<label>${f.label} ${badge}<select name="${name}" data-kind="choice" data-orig="${f.value ?? ''}" ${dis}>
+      ${f.choices.map(([v, l]) => html`<option value="${v}" ${v === f.value ? 'selected' : ''}>${l}</option>`)}</select>${help}</label>`;
+  }
+  if (f.kind === 'secret') {
+    return html`<label>${f.label} ${badge}<input type="password" name="${name}" data-kind="secret" data-orig="" autocomplete="new-password"
+        placeholder="${f.is_set ? 'saved ••••••  (type to replace)' : 'not set'}" ${dis}>
+      ${f.is_set && !f.locked && f.source === 'app' ? html`<span class="field-help"><label class="check inline"><input type="checkbox" name="clear:${f.path}"> remove</label></span>` : help}</label>`;
+  }
+  const shown = f.value == null ? '' : f.kind === 'percent' ? +(f.value * 100).toFixed(4) : f.value;
+  const type = f.kind === 'url' ? 'url' : f.kind === 'email' ? 'email' : 'text';
+  const mode = f.kind === 'number' || f.kind === 'percent' ? 'decimal' : f.kind === 'email' ? 'email' : 'text';
+  return html`<label>${f.label}${f.kind === 'percent' ? ' (%)' : ''} ${badge}
+    <input type="${type}" name="${name}" data-kind="${f.kind}" value="${shown}" data-orig="${shown}" inputmode="${mode}"
+      placeholder="${f.placeholder || ''}" autocomplete="off" autocapitalize="off" spellcheck="false" ${dis}>${help}</label>`;
+}
+
+function sectionForm(key, { test } = {}) {
+  const sec = settingsSection(key);
+  if (!sec) return html`<p class="muted small">Sync once to load the settings.</p>`;
+  const state_ = sec.configured == null ? '' : sec.configured ? html`<span class="badge buy">set up</span>` : html`<span class="badge muted">not set up</span>`;
+  return html`<form class="card form settings-form" data-section="${key}">
+    <div class="row between"><h3>${sec.title}</h3>${state_}</div>
+    <p class="small muted">${sec.description}</p>
+    ${sec.fields.map(fieldInput)}
+    <div class="row gap wrap">
+      <button class="btn" type="submit">Save</button>
+      ${test ? html`<button class="btn" type="button" data-action="test-channel" data-channel="${key}" ${sec.configured && state.online ? '' : 'disabled'}>Send a test</button>` : ''}
+    </div>
+  </form>`;
+}
+
+function collectSettings(form) {
+  const changes = {};
+  let secret = false;
+  for (const el of form.querySelectorAll('[name^="set:"]')) {
+    if (el.disabled) continue;
+    const path = el.name.slice(4);
+    const kind = el.dataset.kind;
+    if (kind === 'bool') {
+      if ((el.checked ? 'on' : '') !== el.dataset.orig) changes[path] = el.checked;
+    } else if (kind === 'secret') {
+      if (el.value) { changes[path] = el.value; secret = true; }
+      const clear = form.querySelector(`[name="clear:${path}"]`);
+      if (clear && clear.checked) { changes[path] = null; secret = true; }
+    } else if (el.value.trim() !== String(el.dataset.orig)) {
+      const v = el.value.trim();
+      if (v === '') changes[path] = null;
+      else if (kind === 'number') changes[path] = numOrNull(v);
+      else if (kind === 'percent') changes[path] = numOrNull(v) / 100;
+      else changes[path] = v;
+    }
+  }
+  return { changes, secret };
+}
+
+const SETTINGS_PAGES = [
+  ['notifications', 'Notifications', 'bell', () => {
+    const n = state.snapshot.notifications;
+    const on = n ? n.channels.filter((c) => c.configured && c.key !== 'inbox').map((c) => c.name) : [];
+    return on.length ? `${on.join(', ')} + app` : 'In the app only';
+  }],
+  ['forwarders', 'Package forwarders', 'box', () => {
+    const a = (state.snapshot.forwarders && state.snapshot.forwarders.accounts) || [];
+    return a.length ? a.map((x) => `${x.forwarder_name} ${x.warehouse}`).join(', ') : 'None set up';
+  }],
+  ['rates', 'Taxes & forwarder rates', 'tag', () => {
+    const p = (state.snapshot.rules && state.snapshot.rules.pending) || [];
+    return p.length ? `${p.length} change(s) to review` : (state.snapshot.meta ? `${state.snapshot.meta.destination.name} import rules` : '');
+  }],
+  ['checks', 'Automatic checks & rule updates', 'refresh', () => {
+    const f = (settingsSection('checks') || { fields: [] }).fields.find((x) => x.path === 'schedule.check_every');
+    return f && f.value ? `Prices every ${f.value} h` : 'Automatic price checks off';
+  }],
+  ['advice', 'Buy/wait advice', 'calendar', () => {
+    const f = (settingsSection('advice') || { fields: [] }).fields.find((x) => x.path === 'advisor.max_wait_days');
+    return f ? `Looks ${f.value} days ahead` : '';
+  }],
+  ['stores', 'Stores & shipping', 'store', () => 'Shipping costs and policies per store'],
+  ['ebay', 'eBay', 'tag', () => ((settingsSection('ebay') || {}).configured ? 'API keys set up' : 'Reading public pages')],
+  ['general', 'General & access', 'gear', () => (state.snapshot.meta ? `Deliver to ${state.snapshot.meta.destination.name}` : '')],
+  ['device', 'Sync, device & data', 'share', () => `${state.outbox.length ? `${state.outbox.length} pending · ` : ''}synced ${ago(state.lastSync)}`],
+];
+
 function viewSettings() {
-  const meta = state.snapshot.meta;
-  const d = meta && meta.destination;
-  const pending = state.outbox.map((op) => html`<li class="row between"><span>${describeOp(op)}<span class="small muted"> · ${ago(op.at)}</span></span>
-      <button type="button" class="link danger small" data-action="discard" data-seq="${op.seq}">discard</button></li>`);
-  const failed = state.failed.map((f) => html`<li><b>${describeOp(f.op)}</b><div class="small muted">${f.error}</div></li>`);
+  const rows = SETTINGS_PAGES.map(([key, title, ic, sub]) => html`<a class="settings-row" href="#/settings/${key}">
+      ${icon(ic)}<div class="grow"><b>${title}</b><div class="small muted">${sub()}</div></div>${icon('back', 'icon flip')}</a>`);
   return html`<h1 class="page-title">Settings</h1>
-    <section class="card">
-      <h3>Sync</h3>
-      <div class="row between"><span>Status</span>${statusPill()}</div>
-      <div class="row between small"><span class="muted">Last synced</span><span>${ago(state.lastSync)}</span></div>
-      ${state.lastError ? html`<div class="row between small"><span class="muted">Last error</span><span>${state.lastError}</span></div>` : ''}
-      <button class="btn wide" type="button" data-action="sync">${icon('refresh')} Sync now</button>
-    </section>
-    <section class="card">
-      <h3>Pending changes <span class="muted small">(${state.outbox.length})</span></h3>
-      ${pending.length ? html`<ul class="plain list">${pending}</ul>` : html`<p class="small muted">Everything is synced.</p>`}
-      ${failed.length ? html`<h4>Rejected by the server</h4><ul class="plain list">${failed}</ul><button class="link small" type="button" data-action="clear-failed">clear</button>` : ''}
-    </section>
-    ${forwardersCard()}
-    <form class="card form" id="token-form">
-      <h3>Server access</h3>
-      <label>Access token <span class="small muted">(only if the server was started with --token)</span>
-        <input name="token" value="${state.token || ''}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-      <button class="btn" type="submit">Save token</button>
-    </form>
-    ${notifyCard()}
-    ${rulesCard()}
-    <section class="card">
-      <h3>Install on iPhone / iPad</h3>
-      <ol class="small"><li>Open HawkDrop in <b>Safari</b> (over HTTPS).</li><li>Tap <b>Share</b> ${icon('share', 'icon inline')}, then <b>Add to Home Screen</b>.</li><li>Open it once while online. After that it works offline.</li></ol>
-      <p class="small muted">${isStandalone() ? 'Running as an installed app ✓' : 'Running in the browser.'} ${'serviceWorker' in navigator ? (navigator.serviceWorker.controller ? 'Offline mode active ✓' : 'Offline mode starts after a reload.') : 'This browser has no offline support (needs HTTPS).'}</p>
-    </section>
-    <section class="card">
-      <h3>Data</h3>
-      <div class="row gap wrap">
-        <button class="btn" type="button" data-action="demo" ${state.online ? '' : 'disabled'}>Load demo item</button>
-        <button class="btn danger" type="button" data-action="clear-local">Clear data on this device</button>
-      </div>
-      <p class="small muted">HawkDrop ${meta ? meta.version : ''} · your items live on the server; this device keeps an offline copy.</p>
-    </section>`;
+    <div class="row between card slim"><span>Sync</span>${statusPill()}</div>
+    <nav class="card settings-nav">${rows}</nav>
+    <p class="small muted center">Settings saved here are stored on your HawkDrop server and override config.toml.</p>`;
+}
+
+function storesPage() {
+  const st = state.snapshot.settings;
+  if (!st) return html`<p class="muted">Sync once to load the stores.</p>`;
+  const sel = storesPage.selected || st.stores[0].key;
+  const store = st.stores.find((x) => x.key === sel) || st.stores[0];
+  const value = (k) => (k in store.overrides ? store.overrides[k] : store.values[k]);
+  const fields = st.store_fields.map((f) => {
+    const src = store.app.includes(f.key) ? 'set here' : k2src(store, f.key);
+    const v = value(f.key);
+    if (f.kind === 'bool') {
+      const cur = v === true ? 'yes' : v === false ? 'no' : '';
+      return html`<label>${f.label} <span class="chip tiny">${src}</span><select name="store:${f.key}" data-kind="bool3" data-orig="${cur}">
+        <option value="" ${cur === '' ? 'selected' : ''}>unknown</option><option value="yes" ${cur === 'yes' ? 'selected' : ''}>yes</option><option value="no" ${cur === 'no' ? 'selected' : ''}>no</option></select></label>`;
+    }
+    return html`<label>${f.label} (${store.currency}) <span class="chip tiny">${src}</span>
+      <input name="store:${f.key}" data-kind="number" inputmode="decimal" value="${v ?? ''}" data-orig="${v ?? ''}" placeholder="unknown">${f.help ? html`<span class="field-help">${f.help}</span>` : ''}</label>`;
+  });
+  return html`<form class="card form" id="store-form" data-store="${store.key}">
+    <h3>Stores & shipping</h3>
+    <p class="small muted">Correct a store's shipping policy. It changes every delivered price from that store.</p>
+    <label>Store<select id="store-pick">${st.stores.map((x) => html`<option value="${x.key}" ${x.key === store.key ? 'selected' : ''}>${x.name}</option>`)}</select></label>
+    ${fields}
+    <div class="row gap wrap"><button class="btn" type="submit">Save</button>
+      ${store.app.length ? html`<button class="btn" type="button" data-action="store-reset">Back to defaults</button>` : ''}</div>
+  </form>`;
+}
+function k2src(store, key) { return key in store.overrides ? 'config.toml' : 'built-in'; }
+
+const SOURCE_TARGETS = () => {
+  const code = (state.snapshot.rules && state.snapshot.rules.destination) || 'IL';
+  const fixed = [[`destination.${code}.vat_exempt_usd`, `${code}: VAT-free limit ($)`], [`destination.${code}.duty_exempt_usd`, `${code}: duty-free limit ($)`],
+    [`destination.${code}.vat_rate`, `${code}: VAT rate (fraction, use scale 0.01 for %)`], [`destination.${code}.clearance_fee`, `${code}: courier clearance fee`]];
+  const services = (state.snapshot.forwarders && state.snapshot.forwarders.services) || [];
+  const tables = services.flatMap((f) => f.warehouses.map((w) => [`forwarders.${f.key}.warehouses.${w.code}`, `${f.name} ${w.code}: rate table`]));
+  return [...fixed, ...tables];
+};
+
+function ruleSourcesCard() {
+  const st = state.snapshot.settings;
+  if (!st) return '';
+  const rows = st.rule_sources.map((x) => html`<li class="row between"><div><b>${x.name}</b><div class="small muted">${x.target} · ${x.format === 'table' ? 'table' : 'regex'} · ${x.url}</div></div>
+      ${x.from === 'app' ? html`<button type="button" class="link danger small" data-action="source-remove" data-name="${x.name}">remove</button>` : html`<span class="chip tiny">config.toml</span>`}</li>`);
+  return html`<form class="card form" id="source-form">
+    <h3>Rule sources</h3>
+    <p class="small muted">Pages HawkDrop reads on every rules check, e.g. an official customs page or a forwarder's price list. A regex reads one number (its first group); a table reads weight/price rows.</p>
+    ${rows.length ? html`<ul class="plain list">${rows}</ul>` : ''}
+    <details class="small" ${rows.length ? '' : 'open'}><summary>Add a source</summary>
+      <label>Name<input name="name" placeholder="il_exemption" autocapitalize="off"></label>
+      <label>Page address<input name="url" type="url" placeholder="https://…" autocapitalize="off"></label>
+      <label>Sets<select name="target" id="source-target">${SOURCE_TARGETS().map(([v, l]) => html`<option value="${v}">${l}</option>`)}</select></label>
+      <label>Read with<select name="format" id="source-format"><option value="">a regex</option><option value="table">a weight/price table</option></select></label>
+      <label id="source-regex">Regex <span class="muted">(first group = the value)</span><input name="regex" placeholder="up to \\$\\s*(\\d+)" autocapitalize="off" spellcheck="false"></label>
+      <label id="source-scale">Multiply by <span class="muted">(optional)</span><input name="scale" inputmode="decimal" placeholder="1"></label>
+      <button class="btn" type="submit">Add source</button>
+    </details>
+  </form>`;
+}
+
+function settingsPage(key) {
+  const back = html`<div class="item-head"><a class="icon-btn" href="#/settings" aria-label="Back">${icon('back')}</a>
+    <h1 class="grow">${(SETTINGS_PAGES.find((p) => p[0] === key) || [0, 'Settings'])[1]}</h1></div>`;
+  const meta = state.snapshot.meta;
+  switch (key) {
+    case 'notifications':
+      return html`${back}${notifyCard()}
+        <h2 class="section-title">Channels</h2>
+        ${['telegram', 'whatsapp', 'ntfy', 'email', 'webhook'].map((k) => html`<details class="card fold" data-key="channel-${k}">
+          <summary><b>${(settingsSection(k) || { title: k }).title}</b> ${(settingsSection(k) || {}).configured ? html`<span class="badge buy">set up</span>` : html`<span class="badge muted">not set up</span>`}</summary>
+          ${sectionForm(k, { test: true })}</details>`)}`;
+    case 'forwarders': return html`${back}${forwardersCard()}`;
+    case 'rates': return html`${back}${rulesCard()}`;
+    case 'checks': return html`${back}${sectionForm('checks')}${ruleSourcesCard()}`;
+    case 'advice': return html`${back}${sectionForm('advice')}`;
+    case 'stores': return html`${back}${storesPage()}`;
+    case 'ebay': return html`${back}${sectionForm('ebay')}`;
+    case 'general':
+      return html`${back}${sectionForm('general')}
+        <form class="card form" id="token-form">
+          <h3>Server access</h3>
+          <label>Access token <span class="small muted">(only if the server was started with --token)</span>
+            <input name="token" value="${state.token || ''}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <button class="btn" type="submit">Save token</button>
+        </form>`;
+    case 'device': {
+      const pending = state.outbox.map((op) => html`<li class="row between"><span>${describeOp(op)}<span class="small muted"> · ${ago(op.at)}</span></span>
+          <button type="button" class="link danger small" data-action="discard" data-seq="${op.seq}">discard</button></li>`);
+      const failed = state.failed.map((f) => html`<li><b>${describeOp(f.op)}</b><div class="small muted">${f.error}</div></li>`);
+      return html`${back}
+        <section class="card">
+          <h3>Sync</h3>
+          <div class="row between"><span>Status</span>${statusPill()}</div>
+          <div class="row between small"><span class="muted">Last synced</span><span>${ago(state.lastSync)}</span></div>
+          ${state.lastError ? html`<div class="row between small"><span class="muted">Last error</span><span>${state.lastError}</span></div>` : ''}
+          <button class="btn wide" type="button" data-action="sync">${icon('refresh')} Sync now</button>
+        </section>
+        <section class="card">
+          <h3>Pending changes <span class="muted small">(${state.outbox.length})</span></h3>
+          ${pending.length ? html`<ul class="plain list">${pending}</ul>` : html`<p class="small muted">Everything is synced.</p>`}
+          ${failed.length ? html`<h4>Rejected by the server</h4><ul class="plain list">${failed}</ul><button class="link small" type="button" data-action="clear-failed">clear</button>` : ''}
+        </section>
+        <section class="card">
+          <h3>Install on iPhone / iPad</h3>
+          <ol class="small"><li>Open HawkDrop in <b>Safari</b> (over HTTPS).</li><li>Tap <b>Share</b> ${icon('share', 'icon inline')}, then <b>Add to Home Screen</b>.</li><li>Open it once while online. After that it works offline.</li></ol>
+          <p class="small muted">${isStandalone() ? 'Running as an installed app ✓' : 'Running in the browser.'} ${'serviceWorker' in navigator ? (navigator.serviceWorker.controller ? 'Offline mode active ✓' : 'Offline mode starts after a reload.') : 'This browser has no offline support (needs HTTPS).'}</p>
+        </section>
+        <section class="card">
+          <h3>Data</h3>
+          <div class="row gap wrap">
+            <button class="btn" type="button" data-action="demo" ${state.online ? '' : 'disabled'}>Load demo item</button>
+            <button class="btn danger" type="button" data-action="clear-local">Clear data on this device</button>
+          </div>
+          <p class="small muted">HawkDrop ${meta ? meta.version : ''} · your items live on the server; this device keeps an offline copy.</p>
+        </section>`;
+    }
+    default: return html`${back}<p class="muted">Unknown settings page.</p>`;
+  }
 }
 
 // ---- router / rendering -------------------------------------------------------------------------
@@ -528,6 +713,7 @@ const ROUTES = [
   [/^#\/add$/, () => viewAdd(), 'add', false],
   [/^#\/events$/, () => viewEvents(), 'events', true],
   [/^#\/settings$/, () => viewSettings(), 'settings', true],
+  [/^#\/settings\/(\w+)$/, (m) => settingsPage(m[1]), 'settings', true],
   [/^#\/inbox$/, () => viewInbox(), 'inbox', true],
 ];
 
@@ -549,19 +735,25 @@ function render({ force = false } = {}) {
   const sameRoute = hash === lastHash;
   if (sameRoute && !force && !live) return; // don't wipe a form the user is typing into
   if (sameRoute && !force && main.contains(document.activeElement) && document.activeElement.matches('input,textarea,select')) return;
+  if (sameRoute && !force && main.querySelector('form[data-dirty]')) return; // keep unsaved edits
   const scroll = sameRoute ? window.scrollY : 0;
-  const openDetails = sameRoute ? [...main.querySelectorAll('details[open]')].map((d) => d.querySelector('summary')?.textContent) : [];
+  const detailsKey = (d) => d.dataset.key || d.querySelector('summary')?.textContent;
+  const openDetails = sameRoute ? [...main.querySelectorAll('details[open]')].map(detailsKey) : [];
   viewItem.after = null;
   main.innerHTML = str(view(match));
   if (viewItem.after) viewItem.after(main);
-  main.querySelectorAll('details').forEach((d) => { if (openDetails.includes(d.querySelector('summary')?.textContent)) d.open = true; });
+  main.querySelectorAll('details').forEach((d) => { if (openDetails.includes(detailsKey(d))) d.open = true; });
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   window.scrollTo(0, scroll);
   lastHash = hash;
   if (tab === 'inbox' && (state.snapshot.notifications || {}).unread && !render.marking) {
-    render.marking = true;  // opening the inbox marks what you see as read
-    const ids = state.snapshot.notifications.items.filter((x) => !x.read).map((x) => x.id);
-    setTimeout(() => mutate({ type: 'read_notifications', body: { ids } }).finally(() => { render.marking = false; }), 1500);
+    render.marking = true;  // opening the inbox marks what you've seen as read
+    setTimeout(async () => {
+      try {
+        const ids = location.hash === '#/inbox' ? state.snapshot.notifications.items.filter((x) => !x.read).map((x) => x.id) : [];
+        if (ids.length) await mutate({ type: 'read_notifications', body: { ids } });
+      } finally { render.marking = false; }
+    }, 1500);
   }
 }
 
@@ -777,6 +969,16 @@ async function onClick(ev) {
         toast(`${r.applied} updated, ${r.pending} to review${r.errors.length ? `, ${r.errors.length} problem(s)` : ''}`, { timeout: 6000 });
       } catch (e) { toast(`Could not check: ${e.message}`); }
       break;
+    case 'store-reset': {
+      const f = document.getElementById('store-form');
+      const store = state.snapshot.settings.stores.find((x) => x.key === f.dataset.store);
+      await mutate({ type: 'save_settings', body: { changes: Object.fromEntries(store.app.map((k) => [`stores.${store.key}.${k}`, null])) } });
+      render({ force: true });
+      break;
+    }
+    case 'source-remove':
+      if (confirm(`Remove the rule source “${el.dataset.name}”?`)) await mutate({ type: 'save_settings', body: { changes: { [`rules.sources.${el.dataset.name}`]: null } } });
+      break;
     case 'rule-decide':
       await mutate({ type: 'decide_rule', body: { id: Number(el.dataset.id), decision: el.dataset.decision } });
       break;
@@ -825,6 +1027,7 @@ async function onSubmit(ev) {
     }
   } else if (form.id === 'notify-form') {
     ev.preventDefault();
+    delete form.dataset.dirty;
     const n = state.snapshot.notifications;
     const fd = new FormData(form);
     const subscriptions = {};
@@ -838,10 +1041,11 @@ async function onSubmit(ev) {
       }
       await mutate({ type: 'notify_prefs', body: { subscriptions, settings } });
       const off = n.channels.filter((c) => !c.configured && n.events.some((e) => subscriptions[e.key].includes(c.key)));
-      toast(off.length ? `Saved. ${off.map((c) => c.name).join(', ')} still need setting up in config.toml.` : 'Notification settings saved', { timeout: 6000 });
+      toast(off.length ? `Saved. Set up ${off.map((c) => c.name).join(', ')} under Channels to receive them.` : 'Notification settings saved', { timeout: 6000 });
     } catch (e) { toast(e.message); }
   } else if (form.id === 'rules-form') {
     ev.preventDefault();
+    delete form.dataset.dirty;
     const changes = {};
     try {
       for (const input of form.querySelectorAll('input[name^="rule:"]')) {
@@ -854,6 +1058,49 @@ async function onSubmit(ev) {
     if (!Object.keys(changes).length) { toast('Nothing changed'); return; }
     await mutate({ type: 'set_rules', body: { changes } });
     toast(`${Object.keys(changes).length} rule(s) saved`);
+  } else if (form.classList.contains('settings-form')) {
+    ev.preventDefault();
+    try {
+      const { changes, secret } = collectSettings(form);
+      if (!Object.keys(changes).length) { toast('Nothing changed'); return; }
+      if (secret && !state.online) throw new Error('Connect to your HawkDrop server to save passwords and keys.');
+      if (secret) {
+        await online('PUT', 'api/settings', { changes }); // secrets never wait in the offline queue
+      } else {
+        await mutate({ type: 'save_settings', body: { changes } });
+      }
+      delete form.dataset.dirty;
+      toast('Settings saved');
+      render({ force: true });
+    } catch (e) { toast(e.message, { timeout: 6000 }); }
+  } else if (form.id === 'store-form') {
+    ev.preventDefault();
+    const changes = {};
+    try {
+      for (const el of form.querySelectorAll('[name^="store:"]')) {
+        const v = el.value.trim();
+        if (v === String(el.dataset.orig)) continue;
+        const path = `stores.${form.dataset.store}.${el.name.slice(6)}`;
+        changes[path] = el.dataset.kind === 'bool3' ? (v === '' ? null : v === 'yes') : (v === '' ? null : numOrNull(v));
+      }
+    } catch (e) { toast(e.message); return; }
+    if (!Object.keys(changes).length) { toast('Nothing changed'); return; }
+    await mutate({ type: 'save_settings', body: { changes } });
+    delete form.dataset.dirty;
+    toast('Store settings saved');
+    render({ force: true });
+  } else if (form.id === 'source-form') {
+    ev.preventDefault();
+    const v = Object.fromEntries(new FormData(form));
+    const name = (v.name || '').trim();
+    if (!/^[\w-]{1,40}$/.test(name)) { toast('Give the source a short name (letters, digits, - or _)'); return; }
+    if (!/^https?:\/\//i.test((v.url || '').trim())) { toast('Enter the page address (https://…)'); return; }
+    if (!v.format && !(v.regex || '').includes('(')) { toast('The regex needs a (group) around the value'); return; }
+    const src = { url: v.url.trim(), target: v.target, format: v.format || null, regex: v.format ? null : v.regex, scale: v.scale ? Number(v.scale) : null };
+    await mutate({ type: 'save_settings', body: { changes: { [`rules.sources.${name}`]: src } } });
+    delete form.dataset.dirty;
+    toast('Source added - it is read on the next rules check');
+    render({ force: true });
   } else if (form.id === 'token-form') {
     ev.preventDefault();
     await setToken(new FormData(form).get('token').trim());
@@ -905,6 +1152,15 @@ on('failed', ({ op, error }) => toast(`Server rejected “${describeOp(op)}”: 
 window.addEventListener('hashchange', () => render());
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
+document.addEventListener('input', (ev) => { const f = ev.target.closest('#view form'); if (f && f.id !== 'add-form') f.dataset.dirty = '1'; });
+document.addEventListener('change', (ev) => {
+  if (ev.target.id === 'store-pick') { storesPage.selected = ev.target.value; render({ force: true }); }
+  if (ev.target.id === 'source-format') {
+    const table = ev.target.value === 'table';
+    document.getElementById('source-regex').hidden = table;
+    document.getElementById('source-scale').hidden = table;
+  }
+});
 setInterval(() => { document.getElementById('status').innerHTML = str(statusPill()); }, 30000);
 
 if (state.snapshot === null) {

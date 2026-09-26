@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from hawkdrop import __version__, api, rules
+from hawkdrop import settings as app_settings
 from hawkdrop.config import Config
 from hawkdrop.currency import FX
 from hawkdrop.db import Database
@@ -65,10 +66,24 @@ class ServerContext:
     offline_fx: bool | None = None
     token: str | None = None
     base_path: str = ""  # e.g. "/hawkdrop" when a reverse proxy forwards the prefix unchanged
+    check_every: float | None = None  # startup defaults; the app's settings override them
+    rules_every: float | None = 7.0
 
     def tracker(self) -> Tracker:
         db = Database(self.db_path)
-        return Tracker.from_config(db, FX(db, offline=self.offline_fx or None), self.config, self.dest_code)
+        cfg = app_settings.effective(db, self.config)
+        t = Tracker.from_config(db, FX(db, offline=self.offline_fx or None), cfg,
+                                app_settings.dest_code(db) or self.dest_code)
+        t.file_config = self.config
+        t.startup = {"check_every": self.check_every, "rules_every": self.rules_every}
+        return t
+
+    def interval(self, name: str) -> float | None:
+        db = Database(self.db_path)
+        try:
+            return app_settings.schedule(db, name, getattr(self, name))
+        finally:
+            db.close()
 
 
 # ---- request parsing helpers ------------------------------------------------------
@@ -237,6 +252,24 @@ class Api:
             raise ApiError(502, str(exc)) from None
         t.notifier.evaluate(t, [item])
         return api.item_detail(t, item)
+
+    # ---- settings ------------------------------------------------------------------------
+    @staticmethod
+    @route("GET", r"/api/settings")
+    def get_settings(t, body, query):
+        return api.settings_view(t)
+
+    @staticmethod
+    @route("PUT", r"/api/settings")
+    def put_settings(t, body, query):
+        changes = body.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            raise ApiError(400, "'changes' must be an object of {setting: value}")
+        try:
+            app_settings.update(t.db, changes)
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
+        return api.settings_view(t)
 
     # ---- rules ----------------------------------------------------------------------------
     @staticmethod
@@ -510,16 +543,31 @@ def _next_check_delay(ctx: ServerContext, every: timedelta, last_of=lambda t: t.
     return max(30.0, (due - datetime.now(timezone.utc)).total_seconds())
 
 
-def _checker_loop(ctx: ServerContext, every_hours: float, stop: threading.Event):
-    every = timedelta(hours=every_hours)
-    while not stop.wait(_next_check_delay(ctx, every)):
-        run_scheduled_check(ctx)
+def _schedule_loop(ctx: ServerContext, name: str, unit: timedelta, last_of, run, first_delay: float,
+                   stop: threading.Event):
+    """Run ``run`` every ``ctx.interval(name)`` units; the interval is re-read so changes in the app apply live."""
+    while not stop.is_set():
+        every = ctx.interval(name)
+        if not every:
+            if stop.wait(60):
+                return
+            continue
+        delay = _next_check_delay(ctx, unit * every, last_of, first_delay)
+        if delay > 300:  # wake up now and then to notice a changed interval
+            stop.wait(300)
+            continue
+        if stop.wait(delay):
+            return
+        run(ctx)
 
 
-def _rules_loop(ctx: ServerContext, every_days: float, stop: threading.Event):
-    every = timedelta(days=every_days)
-    while not stop.wait(_next_check_delay(ctx, every, _last_rules_check, first_delay=120.0)):
-        run_rules_check(ctx)
+def _checker_loop(ctx: ServerContext, stop: threading.Event):
+    _schedule_loop(ctx, "check_every", timedelta(hours=1), lambda t: t.db.get_kv("last_auto_check"),
+                   run_scheduled_check, 60.0, stop)
+
+
+def _rules_loop(ctx: ServerContext, stop: threading.Event):
+    _schedule_loop(ctx, "rules_every", timedelta(days=1), _last_rules_check, run_rules_check, 120.0, stop)
 
 
 def log(message: str):
@@ -545,12 +593,10 @@ def serve(ctx: ServerContext, host: str, port: int, certfile: str | None = None,
           check_every_hours: float | None = None, rules_every_days: float | None = None):
     httpd = make_server(ctx, host, port, certfile, keyfile)
     stop = threading.Event()
-    if check_every_hours:
-        threading.Thread(target=_checker_loop, args=(ctx, check_every_hours, stop), daemon=True).start()
-    rules_on = rules_every_days and ((ctx.config.rules or {}).get("feed_url", rules.DEFAULT_FEED)
-                                     or (ctx.config.rules or {}).get("sources"))
-    if rules_on:
-        threading.Thread(target=_rules_loop, args=(ctx, rules_every_days, stop), daemon=True).start()
+    ctx.check_every, ctx.rules_every = check_every_hours, rules_every_days
+    for loop in (_checker_loop, _rules_loop):  # both idle while their interval is off
+        threading.Thread(target=loop, args=(ctx, stop), daemon=True).start()
+    check_every_hours, rules_every_days = ctx.interval("check_every"), ctx.interval("rules_every")
 
     def on_term(signum, frame):  # `docker stop` / systemd send SIGTERM
         raise KeyboardInterrupt
@@ -566,7 +612,7 @@ def serve(ctx: ServerContext, host: str, port: int, certfile: str | None = None,
         log("WARNING: reachable from the network without an access token - set --token / HAWKDROP_TOKEN")
     if check_every_hours:
         log(f"automatic price checks every {check_every_hours:g} h")
-    if rules_on:
+    if rules_every_days:
         log(f"checking for tax/forwarder rule updates every {rules_every_days:g} days")
     if public and not certfile:
         log("note: iOS enables offline mode only over HTTPS - put a TLS proxy in front (see README)")

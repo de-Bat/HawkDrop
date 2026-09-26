@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from hawkdrop import __version__
+from hawkdrop import settings as app_settings
 from hawkdrop.calendar_events import upcoming_events
 from hawkdrop.config import db_path, load_config, server_settings
 from hawkdrop.currency import FX
@@ -556,7 +557,8 @@ def cmd_notify_status(t: Tracker, a):
     n = t.notifier
     print("Channels:")
     for key, ch in n.channels.items():
-        state = "always on" if key == "inbox" else ("configured" if ch.configured else f"not set up ([notify.{key}])")
+        state = "always on" if key == "inbox" else ("configured" if ch.configured else
+                                                     "not set up (app Settings, or [notify.{key}] in config.toml)")
         print(f"  {key:<9} {ch.name:<12} {state}")
     subs = n.subscriptions()
     print()
@@ -615,6 +617,41 @@ def cmd_notify_run(t: Tracker, a):
     print(f"{len(new)} new notification(s)")
 
 
+def cmd_settings_show(t: Tracker, a):
+    view = app_settings.view(t.db, load_config())
+    for sec in view["sections"]:
+        state = "" if sec["configured"] is None else ("  ✓ set up" if sec["configured"] else "  (not set up)")
+        print(f"{sec['title']}{state}")
+        for f in sec["fields"]:
+            if f["kind"] == "secret":
+                value = "••••••" if f["is_set"] else "-"
+            elif f["kind"] == "percent" and f["value"] is not None:
+                value = f"{f['value'] * 100:g}%"
+            else:
+                value = "-" if f["value"] in (None, "") else f["value"]
+            src = {"app": "", "default": " (default)", "config": " (config.toml)",
+                   "environment": f" (env {f['env']})"}[f["source"]]
+            print(f"  {f['path']:<32} {value}{src}")
+    print("\nChange with `hawkdrop settings set <setting> <value>` or in the app (Settings).")
+
+
+def cmd_settings_set(t: Tracker, a):
+    field = app_settings.FIELDS.get(a.path)
+    value = a.value
+    if a.settings_command == "unset":
+        value = None
+    elif field and field.kind == "percent":
+        value = float(value.rstrip("%")) / 100 if value.endswith("%") else float(value)
+    elif field and field.kind == "bool" or a.path.split(".")[-1] in ("ships_abroad", "collects_import_vat"):
+        value = value.lower() in ("true", "yes", "on", "1")
+    try:
+        app_settings.update(t.db, {a.path: value})
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    shown = "••••••" if field and field.kind == "secret" and value else value
+    print(f"{a.path} = {shown}" if value is not None else f"{a.path}: back to config.toml / default")
+
+
 def cmd_remove(t: Tracker, a):
     item = _item(t, a.item)
     t.db.delete_item(item)
@@ -628,7 +665,7 @@ def cmd_serve(t: Tracker, a):
     settings = server_settings(vars(a), cfg.server)
     t.db.close()  # the server opens its own connections
     ctx = ServerContext(t.db.path, cfg, _dest_code(a), bool(a.offline) or None, settings.token,
-                        settings.base_path)
+                        settings.base_path, settings.check_every, settings.rules_every)
     serve(ctx, settings.host, settings.port, settings.cert, settings.key, settings.check_every, settings.rules_every)
 
 
@@ -795,6 +832,17 @@ def build_parser() -> argparse.ArgumentParser:
     n = nsub.add_parser("run", help="look for new events now (check does this automatically)")
     n.set_defaults(func=cmd_notify_run)
 
+    s = sub.add_parser("settings", help="settings you can also change in the app")
+    ssub = s.add_subparsers(dest="settings_command")
+    s.set_defaults(func=cmd_settings_show)
+    x = ssub.add_parser("set", help="e.g. `notify.telegram.chat_id 123` or `stores.amazon_us.shipping_flat 15`")
+    x.add_argument("path")
+    x.add_argument("value")
+    x.set_defaults(func=cmd_settings_set)
+    x = ssub.add_parser("unset", help="remove the app's value (back to config.toml / default)")
+    x.add_argument("path")
+    x.set_defaults(func=cmd_settings_set)
+
     s = sub.add_parser("forwarders", help="package forwarders (shipping proxies), their rules and your addresses")
     s.set_defaults(func=cmd_forwarders)
 
@@ -847,10 +895,12 @@ def _dest_code(args) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = load_config()
     db = Database(db_path(args.db))
     try:
-        tracker = Tracker.from_config(db, FX(db, offline=args.offline or None), cfg, _dest_code(args))
+        cfg = app_settings.effective(db, load_config())
+        # --dest for this command > the app's setting > HAWKDROP_DEST > config.toml
+        dest = args.dest or app_settings.dest_code(db) or os.environ.get("HAWKDROP_DEST") or None
+        tracker = Tracker.from_config(db, FX(db, offline=args.offline or None), cfg, dest)
         args.func(tracker, args)
     finally:
         db.close()

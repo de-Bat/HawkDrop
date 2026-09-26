@@ -322,3 +322,21 @@ table.grid .desc { display: none; }
 .review h4 { margin: 4px 0; }
 .row.wrap { flex-wrap: wrap; }
 .btn.small { padding: 6px 12px; font-size: 13px; }
+
+/* settings pages */
+.card.slim { padding-top: 10px; padding-bottom: 10px; align-items: center; }
+.settings-nav { padding: 4px 0; }
+.settings-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: var(--text); text-decoration: none; }
+.settings-row + .settings-row { border-top: 1px solid var(--border); }
+.settings-row > .icon { color: var(--brand); flex: none; width: 22px; height: 22px; }
+.settings-row .grow { flex: 1; min-width: 0; }
+.settings-row .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-row > .icon.flip { transform: scaleX(-1); color: var(--muted); width: 18px; height: 18px; }
+.section-title { font-size: 15px; margin: 18px 4px 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+details.card.fold > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; }
+details.card.fold > summary::-webkit-details-marker { display: none; }
+details.card.fold > .card { box-shadow: none; border: 0; padding: 0; margin: 12px 0 0; background: transparent; }
+details.card.fold[open] > summary { margin-bottom: 4px; }
+.field-help { display: block; font-weight: 400; font-size: 12px; margin-top: 4px; color: var(--muted); }
+label.check.inline { display: inline-flex; margin: 0; font-weight: 400; }
+input:disabled, select:disabled { opacity: 0.6; }

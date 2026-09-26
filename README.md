@@ -228,7 +228,8 @@ Pick which events you want, and where each one goes:
 | `specs_alert` | an item's weight/size is missing or the store pages disagree |
 | `check_failed` | a store's price couldn't be read 3 times in a row (`check_failed_after`) |
 
-Channels are set up in `config.toml`. Secrets can come from environment variables instead,
+Set channels up in the app (**Settings → Notifications → Channels**, with a test button) or in
+`config.toml`. Secrets can also come from environment variables,
 named `HAWKDROP_<CHANNEL>_<FIELD>`, e.g. `HAWKDROP_TELEGRAM_BOT_TOKEN` or
 `HAWKDROP_EMAIL_PASSWORD`.
 
@@ -429,6 +430,9 @@ environment variable, which wins over the config file.
 | `--cert` / `--key` | `HAWKDROP_CERT` / `HAWKDROP_KEY` | none | serve HTTPS directly |
 | `--base-path` | `HAWKDROP_BASE_PATH` | none | URL prefix if the proxy doesn't strip it |
 | `--rules-every` | `HAWKDROP_RULES_EVERY` | `7` | days between automatic rules checks (0 = off) |
+
+`--check-every` and `--rules-every` are only starting values. An interval set in the app
+(**Settings → Automatic checks**) replaces them without a restart.
 | `--db` | `HAWKDROP_DB` | `$HAWKDROP_HOME/hawkdrop.db` | |
 | `--dest` | `HAWKDROP_DEST` | `IL` | destination country for taxes |
 | | `HAWKDROP_HOME` | `~/.hawkdrop` | data + `config.toml` directory |
@@ -465,7 +469,31 @@ Security notes:
 
 ## Configuration
 
-`~/.hawkdrop/config.toml` (set `HAWKDROP_HOME` to move it):
+Nearly everything can be set in the app under **Settings**:
+
+- general: destination and app address
+- notification channels, with test buttons
+- which events go to which channel
+- package forwarders
+- taxes and forwarder rates
+- automatic check intervals, the rules feed and rule sources
+- buy/wait advice settings
+- per-store shipping policies
+- eBay API keys
+
+Some rules for settings saved in the app:
+
+- They're stored on your server, override `config.toml`, and apply immediately. Changing the
+  check interval doesn't need a restart.
+- Passwords, tokens and keys are write-only: the app shows that one is saved but never gets
+  it back from the server. They also can't be saved while offline, so they never sit in the
+  offline queue.
+- A value set by an environment variable (e.g. `HAWKDROP_TELEGRAM_BOT_TOKEN`) wins, and the
+  app shows it as locked.
+- `hawkdrop settings` shows the same settings in the terminal, and `hawkdrop settings set
+  notify.telegram.chat_id 123` changes one.
+
+You can also use a config file, `~/.hawkdrop/config.toml` (set `HAWKDROP_HOME` to move it):
 
 ```toml
 [destination]

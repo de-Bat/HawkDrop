@@ -46,7 +46,7 @@ from hawksense.fetch import FetchError, fetch_html, parse_number
 from hawksense.forwarders import FORWARDERS, Forwarder, forwarders_from_config
 from hawksense.landed import DESTINATIONS, Destination, destination_from_config
 
-DEFAULT_FEED = "https://raw.githubusercontent.com/de-Bat/HawkDrop/main/rules/rules.json"
+DEFAULT_FEED = "https://raw.githubusercontent.com/de-Bat/HawkSense/main/rules/rules.json"
 FEED_VERSION = 1
 REVIEW_CHANGE = 0.5  # fetched values moving more than this (relative) wait for your review
 LAYERS = ("builtin", "fetched", "config", "manual")

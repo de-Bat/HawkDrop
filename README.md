@@ -1,6 +1,11 @@
-<p align="center"><img src="assets/hawksense-logo.png" alt="HawkSense" width="240"></p>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hawksense-logo-dark.png">
+    <img src="assets/hawksense-logo.png" alt="HawkSense" width="320">
+  </picture>
+</h1>
 
-# HawkSense
+<p align="center"><b>Smart price tracker: the real delivered price, and whether to buy now or wait.</b></p>
 
 A smart price tracker for Israeli shoppers (and anyone else). It tracks one item across
 several online stores, local or worldwide, and compares the **real delivered price**:
@@ -354,7 +359,7 @@ services and runs well on a Raspberry Pi, a NAS or a small VPS.
 ### Docker Compose (recommended)
 
 ```bash
-git clone https://github.com/de-Bat/HawkDrop && cd HawkDrop
+git clone https://github.com/de-Bat/HawkSense && cd HawkSense
 cp .env.example .env            # set HAWKSENSE_TOKEN (openssl rand -hex 24)
 docker compose up -d            # http://<server>:8765/?token=<token>
 ```

@@ -123,6 +123,8 @@ function requestFor(op) {
     case 'add_offer': return ['POST', `api/items/${op.itemId}/offers`, op.body];
     case 'remove_offer': return ['DELETE', `api/items/${op.itemId}/offers/${op.offerId}`];
     case 'add_price': return ['POST', `api/items/${op.itemId}/prices`, { ...op.body, client_id: op.clientId }];
+    case 'save_forwarder': return ['POST', 'api/forwarders/accounts', op.body];
+    case 'remove_forwarder': return ['DELETE', `api/forwarders/accounts/${encodeURIComponent(op.body.forwarder)}/${encodeURIComponent(op.body.warehouse)}`];
     default: throw new Error(`unknown change ${op.type}`);
   }
 }
@@ -136,12 +138,14 @@ export function describeOp(op) {
     case 'add_offer': return `Add store ${hostOf(b.url)}`;
     case 'remove_offer': return 'Remove store';
     case 'add_price': return `Price ${b.price} ${b.currency || ''} at ${hostOf(b.store)}`;
+    case 'save_forwarder': return `Set up ${b.forwarder} ${b.warehouse}`;
+    case 'remove_forwarder': return `Remove ${b.forwarder} ${b.warehouse}`;
     default: return op.type;
   }
 }
 
 function emptySnapshot() {
-  return { generated_at: null, meta: null, items: [], events: [], stores: [] };
+  return { generated_at: null, meta: null, items: [], events: [], stores: [], forwarders: { services: [], accounts: [] } };
 }
 
 function applyOp(snap, op) {
@@ -161,7 +165,7 @@ function applyOp(snap, op) {
     case 'update_item':
       if (item) {
         if (b.category) item.category = b.category;
-        if ('target_price' in b) item.target_price = b.target_price === '' ? null : b.target_price;
+        for (const k of ['target_price', 'weight_kg', 'dims']) if (k in b) item[k] = b[k] === '' ? null : b[k];
         item.pending = true;
       }
       break;
@@ -180,6 +184,17 @@ function applyOp(snap, op) {
     case 'add_price':
       if (item) (item.pending_prices ||= []).push({ ...b, clientId: op.clientId, at: op.at });
       break;
+    case 'save_forwarder':
+    case 'remove_forwarder': {
+      const f = (snap.forwarders ||= { services: [], accounts: [] });
+      f.accounts = f.accounts.filter((a) => !(a.forwarder === b.forwarder && a.warehouse === b.warehouse));
+      if (op.type === 'save_forwarder') {
+        const svc = f.services.find((x) => x.key === b.forwarder);
+        const wh = svc && svc.warehouses.find((w) => w.code === b.warehouse);
+        f.accounts.push({ ...b, forwarder_name: svc ? svc.name : b.forwarder, location: wh ? wh.location : '', pending: true });
+      }
+      break;
+    }
     default:
       break;
   }

@@ -4,7 +4,9 @@ Extraction order:
 1. a custom regex set on the offer (first capture group is the price),
 2. schema.org ``Product`` JSON-LD (used by most modern shops, incl. many Israeli ones),
 3. ``product:price:amount`` / ``og:price:amount`` meta tags and ``itemprop="price"`` microdata,
-4. a few store-specific patterns (e.g. Amazon).
+4. a few store-specific patterns (Amazon, eBay).
+
+eBay listings and searches go through ``hawkdrop.ebay`` (official API when configured).
 
 Sites that block bots can always be tracked with manual price entries.
 """
@@ -39,6 +41,7 @@ class Extraction:
     shipping: float | None = None
     title: str | None = None
     method: str = ""
+    url: str | None = None  # the listing actually priced (e.g. the cheapest eBay search result)
 
 
 def fetch_html(url: str, timeout: float = 20.0) -> str:
@@ -189,6 +192,10 @@ _STORE_PATTERNS = {
     "amazon": [
         r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)</span>',
         r'<span class="a-price[^"]*"[^>]*><span class="a-offscreen">([^<]+)</span>',
+    ],
+    "ebay.": [
+        r'<div class="x-price-primary"[^>]*>.*?<span class="ux-textspans">([^<]+)</span>',
+        r'<span[^>]+itemprop="price"[^>]*>([^<]+)</span>',
     ],
 }
 

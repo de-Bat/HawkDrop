@@ -15,8 +15,10 @@ from hawkdrop.config import db_path, load_config, server_settings
 from hawkdrop.currency import FX
 from hawkdrop.db import Database, Item
 from hawkdrop.demo import seed_demo
+from hawkdrop.ebay import SITES as EBAY_SITES, search_url
 from hawkdrop.forecast import Advice
-from hawkdrop.landed import destination_from_config
+from hawkdrop.forwarders import Forwarder, parse_dims, state_from_address
+from hawkdrop.landed import LandedCost, destination_from_config
 from hawkdrop.stores import STORES
 from hawkdrop.tracker import Quote, Tracker
 
@@ -65,15 +67,30 @@ def _print_check(tracker: Tracker, item: Item):
         else:
             ex = r.extraction
             stock = "" if ex.in_stock else " (out of stock)"
-            print(f"  ✓ {r.store.name:<22} {money(ex.price, ex.currency)}{stock}  [{ex.method}]")
+            ship = f" + {money(ex.shipping, ex.currency)} shipping" if ex.shipping else ""
+            print(f"  ✓ {r.store.name:<22} {money(ex.price, ex.currency)}{ship}{stock}  [{ex.method}]")
+            if ex.url and ex.url != r.offer.url:
+                print(f"    {ex.title or 'listing'}: {ex.url}")
+
+
+def _dims_arg(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        dims = parse_dims(value)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    return "x".join(f"{d:g}" for d in dims)
 
 
 def cmd_track(t: Tracker, a):
     item = t.db.get_item(a.name)
+    dims = _dims_arg(a.dims)
     if item:
-        t.db.update_item(item, a.category, a.target)
+        t.db.update_item(item, a.category, a.target, a.weight, dims)
     else:
         item = t.db.add_item(a.name, a.category or "default", a.target)
+        t.db.update_item(item, weight_kg=a.weight, dims=dims)
         print(f"Tracking #{item.id} {item.name} [{item.category}]")
     for url in a.url or []:
         offer = t.add_offer(item, url)
@@ -84,9 +101,21 @@ def cmd_track(t: Tracker, a):
 
 def cmd_add_offer(t: Tracker, a):
     item = _item(t, a.item)
-    offer = t.add_offer(item, a.url, a.shipping, a.shipping_currency, a.regex)
+    url = a.url
+    if a.ebay_search:
+        if url:
+            raise SystemExit("error: give either a URL or --ebay-search, not both")
+        url = search_url(a.ebay_search, a.ebay_site, None if a.condition == "any" else a.condition)
+    elif not url:
+        raise SystemExit("error: give a product URL, a store key, or --ebay-search QUERY")
+    offer = t.add_offer(item, url, a.shipping, a.shipping_currency, a.regex, a.local_shipping)
     store = t.store_for(offer)
     print(f"Added {store.name} ({store.country}, {store.currency}) to {item.name}")
+    if a.ebay_search:
+        cond = "" if a.condition == "any" else f"{a.condition} "
+        print(f"  tracking the cheapest {cond}buy-it-now listing for {a.ebay_search!r}")
+        if not t.ebay.api:
+            print("  tip: add eBay API keys for reliable prices and shipping to your country (see README)")
     if store.notes:
         print(f"  note: {store.notes}")
 
@@ -126,32 +155,72 @@ def cmd_list(t: Tracker, a):
     print(table(rows, ["#", "item", "category", "stores", "best landed", "at", "target"]))
 
 
+def _via(t: Tracker, lc: LandedCost) -> str:
+    if lc.route == "direct":
+        return "direct"
+    key, _, code = lc.route.partition(":")
+    fwd = t.forwarders.get(key)
+    return f"{fwd.name if fwd else key} {code}"
+
+
 def _quote_rows(t: Tracker, quotes: list[Quote]) -> list[list]:
     cur = t.dest.currency
     rows = []
     for q in quotes:
         lc = q.landed
         rows.append([
-            q.store.name, f"{q.store.country}", money(q.point.price, q.point.currency),
+            q.store.name, f"{q.store.country}", _via(t, lc), money(q.point.price, q.point.currency),
             money(lc.item, cur), money(lc.shipping, cur) + ("" if lc.shipping_known else "?"),
-            money(lc.duty + lc.vat, cur), money(lc.fees, cur), money(lc.total, cur),
+            money(lc.duty + lc.vat + lc.sales_tax, cur), money(lc.fees, cur), money(lc.total, cur),
             "yes" if q.point.in_stock else "NO", q.point.ts.date().isoformat(),
         ])
     return rows
 
 
+def _route_detail(t: Tracker, lc: LandedCost, best: bool) -> list[str]:
+    cur = t.dest.currency
+    mark = "★" if best else ("·" if lc.set_up else "?")
+    head = f"    {mark} {_via(t, lc):<22} {money(lc.total, cur):>12}"
+    if not lc.set_up:
+        head += "   (not set up: hawkdrop forwarder add " + lc.route.split(":")[0] + ")"
+    out = [head]
+    parts = [("item", lc.item)]
+    parts += lc.lines if lc.lines else [("shipping", lc.shipping)]
+    parts += [("sales tax", lc.sales_tax), ("customs duty", lc.duty), ("import VAT", lc.vat)]
+    if not lc.lines:
+        parts.append(("fees", lc.fees))
+    out.append("        " + " + ".join(f"{label} {money(v, cur)}" for label, v in parts if v))
+    if lc.notes:
+        out.append("        " + "; ".join(lc.notes))
+    return out
+
+
 def cmd_compare(t: Tracker, a):
     item = _item(t, a.item)
-    quotes = t.quotes(item)
+    quotes = t.quotes(item, explore=a.explore)
     if not quotes:
         raise SystemExit("No prices yet - run `hawkdrop check` or `hawkdrop price`.")
     print(f"{item.name} - landed cost delivered to {t.dest.name} ({t.dest.currency}, FX: {t.fx.source})\n")
     print(table(_quote_rows(t, quotes),
-                ["store", "from", "price", "item", "shipping", "duty+VAT", "fees", "TOTAL", "stock", "seen"]))
+                ["store", "from", "via", "price", "item", "shipping", "taxes", "fees", "TOTAL", "stock", "seen"]))
     print()
     for q in quotes:
-        if q.landed.notes:
-            print(f"  {q.store.name}: " + "; ".join(q.landed.notes))
+        if a.routes or a.explore:
+            print(f"  {q.store.name}:")
+            for i, lc in enumerate(q.routes):
+                print("\n".join(_route_detail(t, lc, i == 0)))
+        elif q.landed.notes:
+            print(f"  {q.store.name} ({_via(t, q.landed)}): " + "; ".join(q.landed.notes))
+    best = quotes[0].landed
+    if best.route != "direct":
+        key, _, code = best.route.partition(":")
+        acc = next((x for x in t.accounts() if x.forwarder == key and x.warehouse == code), None)
+        if acc and acc.address:
+            print(f"\n  Ship the {quotes[0].store.name} order to your {_via(t, best)} address:\n    {acc.address}"
+                  + (f"  (suite {acc.suite})" if acc.suite else ""))
+    if not t.accounts() and any(t.forwarder_routes(q.store, explore=True) for q in quotes):
+        print("\n  tip: stores abroad may be cheaper through a package forwarder - see `hawkdrop compare "
+              f"{a.item!r} --explore` and `hawkdrop forwarders`")
 
 
 def cmd_history(t: Tracker, a):
@@ -246,6 +315,99 @@ def cmd_stores(t: Tracker, a):
     print("\nAny other store works too - HawkDrop guesses country/currency from the URL.")
 
 
+def _rate_text(fwd: Forwarder) -> str:
+    return "; ".join(f"{w.code}: {money(w.rate.first, w.rate.currency)} first {w.rate.first_kg:g} kg "
+                     f"+ {money(w.rate.additional, w.rate.currency)}/{w.rate.step_kg:g} kg" for w in fwd.warehouses)
+
+
+def cmd_forwarders(t: Tracker, a):
+    accounts = t.accounts()
+    mine = {(x.forwarder, x.warehouse) for x in accounts}
+    rows = []
+    for f in t.forwarders.values():
+        whs = ", ".join(f"{w.code}{'✓' if (f.key, w.code) in mine else ''} ({w.location}"
+                        + (f", sales tax {w.sales_tax:.0%}" if w.sales_tax else "") + ")" for w in f.warehouses)
+        fees = []
+        if f.handling_fee:
+            fees.append(f"handling {money(f.handling_fee, f.currency)}")
+        if f.service_fee_rate:
+            fees.append(f"service {f.service_fee_rate:.0%} (min {money(f.service_fee_min, f.currency)})")
+        if f.insurance_rate:
+            fees.append(f"insurance {f.insurance_rate:.1%}")
+        taxes = "paid via service" if f.collects_import_taxes else "courier + clearance fee"
+        if f.collects_import_taxes and f.tax_handling_fee:
+            taxes += f" ({money(f.tax_handling_fee, f.currency)})"
+        rows.append([f.key, f.name, whs, ", ".join(fees) or "-", taxes])
+    print(table(rows, ["key", "name", "warehouses (✓ = yours)", "fees", "import taxes"]))
+    print("\nShipping rates (estimates - check each service's price list, override in config.toml):")
+    for f in t.forwarders.values():
+        print(f"  {f.name:<22} {_rate_text(f)}")
+    if accounts:
+        print("\nYour addresses:")
+        for x in accounts:
+            fwd = t.forwarders.get(x.forwarder)
+            wh = fwd.warehouse(x.warehouse) if fwd else None
+            tax = f"sales tax {x.sales_tax_for(wh)[0]:.1%} ({x.sales_tax_for(wh)[1]})" if wh else "unknown service"
+            print(f"  {fwd.name if fwd else x.forwarder} {x.warehouse}: {x.address or '(no address needed)'}"
+                  + (f" [suite {x.suite}]" if x.suite else "") + f" - {tax}")
+    else:
+        print("\nSet one up with `hawkdrop forwarder add <key>` - you'll be asked for the address(es) it gave you.")
+
+
+def _ask(prompt: str) -> str:
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ""
+
+
+def cmd_forwarder_add(t: Tracker, a):
+    fwd = t.forwarders.get(a.key)
+    if fwd is None:
+        raise SystemExit(f"error: unknown forwarder {a.key!r}. Known: {', '.join(t.forwarders)}")
+    if a.warehouse:
+        wanted = [fwd.warehouse(a.warehouse)]
+        if wanted[0] is None:
+            raise SystemExit(f"error: {fwd.name} warehouses: {', '.join(w.code for w in fwd.warehouses)}")
+    else:
+        wanted = list(fwd.warehouses)
+    interactive = sys.stdin.isatty() and a.address is None
+    if fwd.needs_address and a.address is None and not interactive:
+        raise SystemExit(f"error: {fwd.name} needs the address it gave you - e.g.\n  hawkdrop forwarder add {fwd.key} "
+                         f"--warehouse {wanted[0].code} --address \"Your Name, 123 Street #SUITE, City, ST 12345\"")
+    if fwd.notes:
+        print(fwd.notes)
+    saved = 0
+    for wh in wanted:
+        address, suite = a.address or "", a.suite or ""
+        if fwd.needs_address and interactive:
+            address = _ask(f"Your {fwd.name} address in {wh.location} ({wh.code}), as shown in your account "
+                           "- leave empty to skip:\n  > ")
+            if not address:
+                continue
+            suite = _ask("  Suite / customer number (optional): ")
+        try:
+            acc = t.save_account(fwd.key, wh.code, address, suite, a.sales_tax)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from None
+        saved += 1
+        rate, source = acc.sales_tax_for(wh)
+        detail = f"sales tax {rate:.1%} ({source})" if wh.country == "US" else wh.location
+        state = state_from_address(address)
+        if wh.country == "US" and address and not state and a.sales_tax is None:
+            detail += " - no US state found in the address, using the warehouse default"
+        print(f"  ✓ {fwd.name} {wh.code}: {detail}")
+    if not saved:
+        print("Nothing saved.")
+    else:
+        print("Prices from matching stores now include this route - see `hawkdrop compare <item> --routes`.")
+
+
+def cmd_forwarder_remove(t: Tracker, a):
+    n = t.remove_account(a.key, a.warehouse)
+    print(f"Removed {n} address{'es' if n != 1 else ''}" if n else "No matching forwarder address.")
+
+
 def cmd_remove(t: Tracker, a):
     item = _item(t, a.item)
     t.db.delete_item(item)
@@ -293,7 +455,7 @@ def cmd_backup(t: Tracker, a):
 def cmd_demo(t: Tracker, a):
     item = seed_demo(t.db)
     print(f"Seeded demo item #{item.id}: {item.name}\n")
-    cmd_compare(t, argparse.Namespace(item=str(item.id)))
+    cmd_compare(t, argparse.Namespace(item=str(item.id), routes=False, explore=False))
     print()
     cmd_advise(t, argparse.Namespace(item=str(item.id), json=False))
 
@@ -315,14 +477,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--category", help="electronics, computers, phones, appliances, clothing, shoes, toys ...")
     s.add_argument("--target", type=float, help="alert when landed price drops to this (destination currency)")
     s.add_argument("--no-check", action="store_true", help="don't fetch prices right away")
+    s.add_argument("--weight", type=float, metavar="KG", help="shipping weight in kg (for forwarder rates)")
+    s.add_argument("--dims", metavar="LxWxH", help="boxed size in cm, e.g. 30x20x10 (volumetric weight)")
     s.set_defaults(func=cmd_track)
 
-    s = sub.add_parser("add-offer", help="add a store/URL to an item")
+    s = sub.add_parser("add-offer", help="add a store/URL (or an eBay search) to an item")
     s.add_argument("item")
-    s.add_argument("url", help="product URL, or a store key for manual-only tracking (see `stores`)")
+    s.add_argument("url", nargs="?", help="product URL, or a store key for manual-only tracking (see `stores`)")
     s.add_argument("--shipping", type=float, help="shipping cost to you (overrides store policy)")
-    s.add_argument("--shipping-currency", help="currency of --shipping (default: price currency)")
+    s.add_argument("--shipping-currency", help="currency of --shipping and --local-shipping (default: price's)")
+    s.add_argument("--local-shipping", type=float, help="store's shipping to a forwarder's warehouse")
     s.add_argument("--regex", help="custom regex whose first group is the price")
+    s.add_argument("--ebay-search", metavar="QUERY", help="track the cheapest eBay listing for this search")
+    s.add_argument("--condition", choices=["new", "used", "any"], default="new", help="for --ebay-search")
+    s.add_argument("--ebay-site", choices=list(EBAY_SITES), default="ebay.com", help="for --ebay-search")
     s.set_defaults(func=cmd_add_offer)
 
     s = sub.add_parser("price", help="record a price manually")
@@ -342,8 +510,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("list", help="list tracked items")
     s.set_defaults(func=cmd_list)
 
-    s = sub.add_parser("compare", help="landed-cost comparison across stores")
+    s = sub.add_parser("compare", help="landed-cost comparison across stores (and forwarders)")
     s.add_argument("item")
+    s.add_argument("--routes", action="store_true", help="itemise every way to get it: direct and each forwarder")
+    s.add_argument("--explore", action="store_true", help="also price forwarders you haven't set up")
     s.set_defaults(func=cmd_compare)
 
     s = sub.add_parser("history", help="price history sparkline")
@@ -363,6 +533,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stores", help="built-in store profiles")
     s.set_defaults(func=cmd_stores)
+
+    s = sub.add_parser("forwarders", help="package forwarders (shipping proxies), their rules and your addresses")
+    s.set_defaults(func=cmd_forwarders)
+
+    s = sub.add_parser("forwarder", help="set up or remove a package forwarder")
+    fsub = s.add_subparsers(dest="forwarder_command", required=True)
+    f = fsub.add_parser("add", help="register a forwarder (asks for the address(es) it gave you)")
+    f.add_argument("key", help="e.g. dealtas, redbox, zipy (see `hawkdrop forwarders`)")
+    f.add_argument("--warehouse", help="only this warehouse, e.g. US or UK (default: ask for each)")
+    f.add_argument("--address", help="your address at that warehouse (skips the questions)")
+    f.add_argument("--suite", help="your suite / customer number")
+    f.add_argument("--sales-tax", type=float, metavar="RATE", help="override the sales tax, e.g. 0 or 0.07")
+    f.set_defaults(func=cmd_forwarder_add)
+    f = fsub.add_parser("remove", help="forget a forwarder (or one of its warehouses)")
+    f.add_argument("key")
+    f.add_argument("--warehouse")
+    f.set_defaults(func=cmd_forwarder_remove)
 
     s = sub.add_parser("remove", help="stop tracking an item")
     s.add_argument("item")
@@ -403,8 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         dest_cfg = {"code": _dest_code(args)}
     db = Database(db_path(args.db))
     try:
-        tracker = Tracker(db, FX(db, offline=args.offline or None), destination_from_config(dest_cfg),
-                          Tracker.settings_from(cfg.advisor), cfg.stores)
+        tracker = Tracker.from_config(db, FX(db, offline=args.offline or None), destination_from_config(dest_cfg), cfg)
         args.func(tracker, args)
     finally:
         db.close()

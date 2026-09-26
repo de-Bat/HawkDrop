@@ -28,6 +28,7 @@ from hawkdrop.config import Config
 from hawkdrop.currency import FX
 from hawkdrop.db import Database
 from hawkdrop.demo import seed_demo
+from hawkdrop.forwarders import parse_dims
 from hawkdrop.landed import destination_from_config
 from hawkdrop.tracker import Tracker
 
@@ -67,8 +68,8 @@ class ServerContext:
     def tracker(self) -> Tracker:
         db = Database(self.db_path)
         dest_cfg = {"code": self.dest_code} if self.dest_code else dict(self.config.destination)
-        return Tracker(db, FX(db, offline=self.offline_fx or None), destination_from_config(dest_cfg),
-                       Tracker.settings_from(self.config.advisor), self.config.stores)
+        return Tracker.from_config(db, FX(db, offline=self.offline_fx or None), destination_from_config(dest_cfg),
+                                   self.config)
 
 
 # ---- request parsing helpers ------------------------------------------------------
@@ -164,10 +165,16 @@ class Api:
     @route("PATCH", r"/api/items/(\d+)")
     def update_item(t, body, query, item_id):
         item = _item(t, item_id)
-        t.db.update_item(item, _str(body, "category"), _num(body, "target_price"))
-        if "target_price" in body and body["target_price"] in (None, ""):
-            with t.db.conn:
-                t.db.conn.execute("UPDATE items SET target_price = NULL WHERE id = ?", (item.id,))
+        dims = _str(body, "dims")
+        if dims:
+            try:
+                dims = "x".join(f"{d:g}" for d in parse_dims(dims))
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from None
+        t.db.update_item(item, _str(body, "category"), _num(body, "target_price"), _num(body, "weight_kg"), dims)
+        for col in ("target_price", "weight_kg", "dims"):
+            if col in body and body[col] in (None, ""):
+                t.db.clear_item_field(item, col)
         return api.item_detail(t, t.db.get_item(item.id))
 
     @staticmethod
@@ -183,7 +190,7 @@ class Api:
     def add_offer(t, body, query, item_id):
         item = _item(t, item_id)
         t.add_offer(item, _str(body, "url", required=True), _num(body, "shipping"),
-                    _str(body, "shipping_currency"), _str(body, "regex"))
+                    _str(body, "shipping_currency"), _str(body, "regex"), _num(body, "local_shipping"))
         return api.item_detail(t, item)
 
     @staticmethod
@@ -218,6 +225,27 @@ class Api:
     @route("POST", r"/api/check")
     def check_all(t, body, query):
         return {"results": {i.id: api.check_results(t.check(i)) for i in t.db.list_items()}}
+
+    @staticmethod
+    @route("GET", r"/api/forwarders")
+    def get_forwarders(t, body, query):
+        return api.forwarders(t)
+
+    @staticmethod
+    @route("POST", r"/api/forwarders/accounts")
+    def save_forwarder_account(t, body, query):
+        try:
+            t.save_account(_str(body, "forwarder", required=True), _str(body, "warehouse", required=True),
+                           _str(body, "address") or "", _str(body, "suite") or "", _num(body, "sales_tax"))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
+        return api.forwarders(t)
+
+    @staticmethod
+    @route("DELETE", r"/api/forwarders/accounts/([\w-]+)/([\w-]+)")
+    def delete_forwarder_account(t, body, query, forwarder, warehouse):
+        t.remove_account(forwarder, warehouse)  # removing twice (offline replay) is fine
+        return api.forwarders(t)
 
     @staticmethod
     @route("POST", r"/api/demo")

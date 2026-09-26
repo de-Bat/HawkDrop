@@ -20,6 +20,17 @@ Example::
     [stores.amazon_us]
     shipping_flat = 15
     shipping_free_over = 49
+
+    [forwarders.dealtas]             # see hawkdrop/forwarders.py for every field
+    tax_handling_fee = 5
+
+    [forwarders.dealtas.warehouses.US]
+    first = 12.5                     # first 0.5 kg (warehouse currency)
+    additional = 5                   # each extra 0.5 kg
+
+    [ebay]                           # optional: official API instead of reading pages
+    client_id = "..."
+    client_secret = "..."
 """
 
 from __future__ import annotations
@@ -44,6 +55,8 @@ class Config:
     advisor: dict = field(default_factory=dict)
     stores: dict = field(default_factory=dict)
     server: dict = field(default_factory=dict)
+    forwarders: dict = field(default_factory=dict)
+    ebay: dict = field(default_factory=dict)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -53,7 +66,7 @@ def load_config(path: Path | None = None) -> Config:
     with open(path, "rb") as f:
         data = tomllib.load(f)
     return Config(data.get("destination", {}), data.get("advisor", {}), data.get("stores", {}),
-                  data.get("server", {}))
+                  data.get("server", {}), data.get("forwarders", {}), data.get("ebay", {}))
 
 
 @dataclass

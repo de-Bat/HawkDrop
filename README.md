@@ -6,8 +6,14 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
 **buy now or wait** for an upcoming sales day, with a confidence score.
 
 - **Multi-store tracking**: KSP, Ivory, Bug, LastPrice, Payngo, ACE, Zap, Amazon (US/UK/DE),
-  AliExpress, eBay, B&H, Newegg. Any other shop works too, with country and currency guessed
-  from the domain.
+  AliExpress, eBay (US/UK/DE), B&H, Newegg. Any other shop works too, with country and currency
+  guessed from the domain.
+- **eBay**: track a single listing, or a *search* that follows the cheapest matching
+  buy-it-now listing (price + shipping). Uses eBay's official API when you add keys.
+- **Package forwarders**: Dealtas, RedBox, Zipy, MyUS, Shipito, Stackry, Planet Express and
+  Forward2me. Add the addresses they gave you (US, UK, ...) and every store abroad is also
+  priced through them, each by its own rules: weight-based rates, volumetric weight, handling,
+  insurance and service fees, US sales tax at the warehouse's state, and who pays import tax.
 - **Landed cost**: Israeli import rules by default: 18% VAT above the personal-import
   exemption, customs duty per category above $500, and a courier clearance fee when taxes
   are collected on arrival. Stores that charge VAT at checkout (Amazon, AliExpress) are
@@ -53,6 +59,80 @@ hawkdrop add-offer "WH-1000XM5" https://shop.co.il/p/1 --regex 'class="price">([
 
 `--shipping` on `add-offer` or `price` overrides a store's shipping policy. Unknown shipping is
 flagged with `?` in `compare`.
+
+## eBay
+
+```bash
+hawkdrop add-offer "WH-1000XM5" https://www.ebay.com/itm/123456789012     # one listing
+hawkdrop add-offer "WH-1000XM5" --ebay-search "sony wh-1000xm5" --condition new   # cheapest match
+hawkdrop add-offer "WH-1000XM5" --ebay-search "sony wh-1000xm5" --ebay-site ebay.de
+```
+
+A search re-runs on every `check` and records the cheapest buy-it-now listing, counting its
+shipping. `check` prints which listing it was. You can also paste any eBay search URL.
+
+Without API keys HawkDrop reads the public pages, which eBay sometimes blocks. For reliable
+prices, and shipping costs quoted **to your country**, create a free developer account at
+[developer.ebay.com](https://developer.ebay.com), make a production keyset, and add:
+
+```toml
+[ebay]
+client_id = "YourApp-PRD-..."
+client_secret = "PRD-..."
+```
+
+(or set `HAWKDROP_EBAY_CLIENT_ID` / `HAWKDROP_EBAY_CLIENT_SECRET`).
+
+## Package forwarders
+
+Many stores don't ship to Israel, or charge a lot for it. With a package forwarder you get a
+personal address at its warehouse abroad, the store ships there, and the forwarder sends it
+on. HawkDrop prices every foreign store both ways, direct and through each forwarder you've
+set up, and uses the cheapest.
+
+```bash
+hawkdrop forwarders                    # services, their warehouses, fees and rates
+hawkdrop forwarder add dealtas         # asks for the address it gave you
+hawkdrop forwarder add redbox          # asks for each warehouse: US, UK (skip what you don't use)
+hawkdrop forwarder add zipy            # buy-for-me service: no address needed
+hawkdrop forwarder add shipito --warehouse US --address "Your Name, 1 Rd #123, Portland, OR 97230"
+
+hawkdrop track "WH-1000XM5" --weight 0.9 --dims 26x22x9   # improves shipping estimates
+hawkdrop compare "WH-1000XM5" --routes    # every route, itemised
+hawkdrop compare "WH-1000XM5" --explore   # also price services you haven't set up
+```
+
+| Service | Warehouses | Notable rules |
+|---|---|---|
+| Dealtas | US (Delaware) | no sales tax; customs cleared and taxes billed through the service |
+| RedBox | US (Delaware), UK | taxes billed through the service |
+| Zipy | US, UK, DE, CN | buys for you (no address); service fee on the order; taxes included |
+| MyUS | US (Florida) | 7% FL sales tax; express courier collects taxes and adds a clearance fee |
+| Shipito | US (Oregon), US-CA (California) | Oregon is sales-tax free; handling fee |
+| Stackry | US (New Hampshire) | no sales tax |
+| Planet Express | US (California) | CA sales tax; handling fee |
+| Forward2me | UK | UK prices include 20% VAT |
+
+How a forwarded price is built:
+
+1. the store price, plus the store's **domestic shipping** to the warehouse (for example
+   Amazon.com is free over $35; override with `add-offer --local-shipping`),
+2. **US sales tax** for the warehouse's state. HawkDrop reads the state from your address,
+   so `..., New Castle, DE 19720` means 0%. Override with `--sales-tax`,
+3. the forwarder's **rate card**: price for the first weight step plus each extra step,
+   charged on the greater of actual and volumetric weight (L×W×H / 5000). Without `--weight`,
+   a typical weight for the item's category is assumed and flagged,
+4. **handling, insurance and service fees** as the service charges them,
+5. **Israeli import tax** on goods + shipping, with the same exemptions as direct orders.
+   It's paid either through the service (plus its fee) or to the courier (plus its clearance fee).
+
+`compare` shows which address to ship the order to. In the web app, add forwarders under
+**Settings → Package forwarders** (works offline too), and set weight and box size in an
+item's edit sheet.
+
+> The forwarder rates and fees are rough estimates and change often. Check each service's
+> current price list and override them in config.toml (see below). Stores that aren't
+> built in are assumed to ship to you directly unless you set `ships_abroad = false`.
 
 ## Example advice
 
@@ -258,6 +338,38 @@ wait_cost_per_day = 0.0006  # ... plus 0.06% per day of waiting
 [stores.amazon_us]
 shipping_flat = 15
 shipping_free_over = 49
+local_shipping_flat = 6.99   # to a forwarder's warehouse
+local_free_over = 35
+
+[stores."shop.example.com"]  # a store that isn't built in
+ships_abroad = false         # only reachable through a forwarder
+
+[forwarders.dealtas]
+tax_handling_fee = 5         # in the service's currency
+handling_fee = 0
+insurance_rate = 0.02        # 2% of the goods value
+insurance_min = 3
+
+[forwarders.dealtas.warehouses.US]
+first = 12.5                 # first 0.5 kg, in the warehouse's currency
+additional = 5               # each extra 0.5 kg
+first_kg = 0.5
+step_kg = 0.5
+min_kg = 0
+vol_divisor = 5000           # cm³ per kg; 0 turns off volumetric weight
+sales_tax = 0
+
+[forwarders.myforwarder]     # a service that isn't built in
+name = "My Forwarder"
+currency = "USD"
+collects_import_taxes = false
+
+[forwarders.myforwarder.warehouses.US]
+country = "US"
+location = "Wilmington, DE"
+currency = "USD"
+first = 15
+additional = 4
 ```
 
 > Tax thresholds, rates and store shipping policies change. The built-in values are

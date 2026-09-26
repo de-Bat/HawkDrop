@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hawkdrop.forwarders import Account
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY,
@@ -43,6 +45,16 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS forwarder_accounts (
+    id INTEGER PRIMARY KEY,
+    forwarder TEXT NOT NULL,
+    warehouse TEXT NOT NULL,
+    address TEXT NOT NULL DEFAULT '',
+    suite TEXT NOT NULL DEFAULT '',
+    sales_tax REAL,
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (forwarder, warehouse)
+);
 CREATE TABLE IF NOT EXISTS fx (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     rates TEXT NOT NULL,
@@ -58,6 +70,8 @@ class Item:
     category: str
     target_price: float | None
     created_at: str
+    weight_kg: float | None = None  # shipping weight, for forwarders' rate cards
+    dims: str | None = None  # boxed size "LxWxH" in cm, for volumetric weight
 
 
 @dataclass
@@ -70,6 +84,7 @@ class Offer:
     shipping_currency: str | None
     price_regex: str | None
     active: bool
+    local_shipping: float | None = None  # store's shipping to a forwarder's warehouse (shipping_currency)
 
 
 @dataclass
@@ -102,11 +117,22 @@ class Database:
         self.conn.executescript(SCHEMA)
         self._migrate()
 
+    def _columns(self, table: str) -> set[str]:
+        return {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+
     def _migrate(self):
-        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(prices)")}
+        cols = self._columns("prices")
+        item_cols = self._columns("items")
+        offer_cols = self._columns("offers")
         with self.conn:
             if "client_id" not in cols:
                 self.conn.execute("ALTER TABLE prices ADD COLUMN client_id TEXT")
+            if "weight_kg" not in item_cols:
+                self.conn.execute("ALTER TABLE items ADD COLUMN weight_kg REAL")
+            if "dims" not in item_cols:
+                self.conn.execute("ALTER TABLE items ADD COLUMN dims TEXT")
+            if "local_shipping" not in offer_cols:
+                self.conn.execute("ALTER TABLE offers ADD COLUMN local_shipping REAL")
             # lets offline clients replay queued price entries without creating duplicates
             self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS prices_client_id ON prices (client_id)"
                               " WHERE client_id IS NOT NULL")
@@ -138,12 +164,20 @@ class Database:
             )
         return self.get_item(name)
 
-    def update_item(self, item: Item, category: str | None = None, target_price: float | None = None):
+    def update_item(self, item: Item, category: str | None = None, target_price: float | None = None,
+                    weight_kg: float | None = None, dims: str | None = None):
+        """Set the given fields; ``None`` leaves a field unchanged (see ``clear_item_field``)."""
         with self.conn:
-            if category is not None:
-                self.conn.execute("UPDATE items SET category = ? WHERE id = ?", (category, item.id))
-            if target_price is not None:
-                self.conn.execute("UPDATE items SET target_price = ? WHERE id = ?", (target_price, item.id))
+            for col, value in (("category", category), ("target_price", target_price),
+                               ("weight_kg", weight_kg), ("dims", dims)):
+                if value is not None:
+                    self.conn.execute(f"UPDATE items SET {col} = ? WHERE id = ?", (value, item.id))
+
+    def clear_item_field(self, item: Item, col: str):
+        if col not in ("target_price", "weight_kg", "dims"):
+            raise ValueError(col)
+        with self.conn:
+            self.conn.execute(f"UPDATE items SET {col} = NULL WHERE id = ?", (item.id,))
 
     def get_item(self, ref: str | int) -> Item | None:
         if isinstance(ref, int) or str(ref).isdigit():
@@ -166,17 +200,19 @@ class Database:
 
     # ---- offers ------------------------------------------------------------
     def add_offer(self, item: Item, store: str, url: str = "", shipping: float | None = None,
-                  shipping_currency: str | None = None, price_regex: str | None = None) -> Offer:
+                  shipping_currency: str | None = None, price_regex: str | None = None,
+                  local_shipping: float | None = None) -> Offer:
         with self.conn:
             self.conn.execute(
-                """INSERT INTO offers (item_id, store, url, shipping, shipping_currency, price_regex)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO offers (item_id, store, url, shipping, shipping_currency, price_regex, local_shipping)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT (item_id, store, url) DO UPDATE SET
                      shipping = COALESCE(excluded.shipping, shipping),
                      shipping_currency = COALESCE(excluded.shipping_currency, shipping_currency),
                      price_regex = COALESCE(excluded.price_regex, price_regex),
+                     local_shipping = COALESCE(excluded.local_shipping, local_shipping),
                      active = 1""",
-                (item.id, store, url, shipping, shipping_currency, price_regex),
+                (item.id, store, url, shipping, shipping_currency, price_regex, local_shipping),
             )
         row = self.conn.execute(
             "SELECT * FROM offers WHERE item_id = ? AND store = ? AND url = ?", (item.id, store, url)
@@ -224,6 +260,33 @@ class Database:
                        bool(r["in_stock"]), r["source"])
             for r in rows
         ]
+
+    # ---- forwarder accounts ------------------------------------------------------
+    def save_account(self, forwarder: str, warehouse: str, address: str = "", suite: str = "",
+                     sales_tax: float | None = None) -> Account:
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO forwarder_accounts (forwarder, warehouse, address, suite, sales_tax)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (forwarder, warehouse) DO UPDATE SET
+                     address = excluded.address, suite = excluded.suite, sales_tax = excluded.sales_tax,
+                     active = 1""",
+                (forwarder, warehouse.upper(), address.strip(), suite.strip(), sales_tax),
+            )
+        return next(a for a in self.accounts() if a.forwarder == forwarder and a.warehouse == warehouse.upper())
+
+    def accounts(self) -> list[Account]:
+        rows = self.conn.execute("SELECT * FROM forwarder_accounts WHERE active = 1 ORDER BY forwarder, warehouse")
+        return [Account(**{**dict(r), "active": bool(r["active"])}) for r in rows]
+
+    def delete_accounts(self, forwarder: str, warehouse: str | None = None) -> int:
+        with self.conn:
+            if warehouse:
+                cur = self.conn.execute("DELETE FROM forwarder_accounts WHERE forwarder = ? AND warehouse = ?",
+                                        (forwarder, warehouse.upper()))
+            else:
+                cur = self.conn.execute("DELETE FROM forwarder_accounts WHERE forwarder = ?", (forwarder,))
+        return cur.rowcount
 
     # ---- small settings store -------------------------------------------------
     def get_kv(self, key: str) -> str | None:

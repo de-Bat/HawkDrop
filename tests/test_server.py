@@ -80,6 +80,38 @@ class ApiTest(ServerTest):
         self.assertIn("price", err["error"])
         self.assertEqual(self.call("GET", "/api/nope")[0], 404)
 
+    def test_forwarder_accounts_and_routes(self):
+        _, catalog = self.call("GET", "/api/forwarders")
+        self.assertIn("dealtas", [f["key"] for f in catalog["services"]])
+        status, err = self.call("POST", "/api/forwarders/accounts", {"forwarder": "dealtas", "warehouse": "US"})
+        self.assertEqual(status, 400)
+        self.assertIn("address", err["error"])
+        body = {"forwarder": "dealtas", "warehouse": "US", "address": "Me, 1 Rd #IL9, New Castle, DE 19720"}
+        _, res = self.call("POST", "/api/forwarders/accounts", body)
+        self.call("POST", "/api/forwarders/accounts", body)  # replayed offline change
+        self.assertEqual(len(res["accounts"]), 1)
+        self.assertEqual(res["accounts"][0]["sales_tax_source"], "DE address")
+
+        _, item = self.call("POST", "/api/items", {"name": "SSD", "category": "computers"})
+        status, item = self.call("PATCH", f"/api/items/{item['id']}", {"weight_kg": 0.3, "dims": "20 x 15 x 5"})
+        self.assertEqual((item["weight_kg"], item["dims"]), (0.3, "20x15x5"))
+        self.assertEqual(self.call("PATCH", f"/api/items/{item['id']}", {"dims": "20x15"})[0], 400)
+        _, detail = self.call("POST", f"/api/items/{item['id']}/prices",
+                              {"store": "https://www.newegg.com/p/1", "price": 120, "currency": "USD"})
+        best = detail["quotes"][0]["landed"]
+        self.assertEqual(best["route"], "dealtas:US")
+        self.assertTrue(best["lines"])
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertEqual(len(snap["forwarders"]["accounts"]), 1)
+
+        _, res = self.call("DELETE", "/api/forwarders/accounts/dealtas/US")
+        self.assertEqual(res["accounts"], [])
+        self.assertEqual(self.call("DELETE", "/api/forwarders/accounts/dealtas/US")[0], 200)
+        _, detail = self.call("GET", f"/api/items/{item['id']}")
+        self.assertEqual(detail["quotes"][0]["landed"]["route"], "direct")
+        _, cleared = self.call("PATCH", f"/api/items/{item['id']}", {"weight_kg": ""})
+        self.assertIsNone(cleared["weight_kg"])
+
     def test_demo_has_history_and_windows(self):
         _, item = self.call("POST", "/api/demo")
         self.assertGreater(len(item["history"]), 100)

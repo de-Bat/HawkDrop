@@ -8,6 +8,8 @@ from hawkdrop import __version__
 from hawkdrop.calendar_events import EVENTS, upcoming_events
 from hawkdrop.db import Item
 from hawkdrop.forecast import Advice, Candidate
+from hawkdrop.forwarders import Account, Forwarder
+from hawkdrop.landed import LandedCost
 from hawkdrop.stores import STORES
 from hawkdrop.tracker import CheckResult, Quote, Tracker
 
@@ -33,7 +35,36 @@ def meta(t: Tracker) -> dict:
 def stores() -> list[dict]:
     return [{"key": s.key, "name": s.name, "country": s.country, "currency": s.currency,
              "shipping_flat": s.shipping_flat, "shipping_free_over": s.shipping_free_over,
-             "collects_import_vat": s.collects_import_vat, "notes": s.notes} for s in STORES.values()]
+             "collects_import_vat": s.collects_import_vat, "ships_abroad": s.ships_abroad, "notes": s.notes}
+            for s in STORES.values()]
+
+
+def forwarder(f: Forwarder) -> dict:
+    return {
+        "key": f.key, "name": f.name, "currency": f.currency, "needs_address": f.needs_address,
+        "handling_fee": f.handling_fee, "insurance_rate": f.insurance_rate, "service_fee_rate": f.service_fee_rate,
+        "service_fee_min": f.service_fee_min, "collects_import_taxes": f.collects_import_taxes,
+        "tax_handling_fee": f.tax_handling_fee, "notes": f.notes,
+        "warehouses": [{"code": w.code, "country": w.country, "location": w.location, "sales_tax": w.sales_tax,
+                        "transit": w.transit, "rate": {"currency": w.rate.currency, "first": w.rate.first,
+                                                       "first_kg": w.rate.first_kg, "additional": w.rate.additional,
+                                                       "step_kg": w.rate.step_kg}}
+                       for w in f.warehouses],
+    }
+
+
+def account(t: Tracker, a: Account) -> dict:
+    fwd = t.forwarders.get(a.forwarder)
+    wh = fwd.warehouse(a.warehouse) if fwd else None
+    rate, source = a.sales_tax_for(wh) if wh else (a.sales_tax, "")
+    return {"forwarder": a.forwarder, "forwarder_name": fwd.name if fwd else a.forwarder, "warehouse": a.warehouse,
+            "location": wh.location if wh else "", "address": a.address, "suite": a.suite,
+            "sales_tax": a.sales_tax, "effective_sales_tax": rate, "sales_tax_source": source}
+
+
+def forwarders(t: Tracker) -> dict:
+    return {"services": [forwarder(f) for f in t.forwarders.values()],
+            "accounts": [account(t, a) for a in t.accounts()]}
 
 
 def events(today: date, days: int = 365) -> list[dict]:
@@ -42,15 +73,21 @@ def events(today: date, days: int = 365) -> list[dict]:
              "active": o.is_active(today)} for o in upcoming_events(today, days)]
 
 
+def landed(lc: LandedCost) -> dict:
+    return {"item": _r(lc.item), "shipping": _r(lc.shipping), "duty": _r(lc.duty), "vat": _r(lc.vat),
+            "fees": _r(lc.fees), "sales_tax": _r(lc.sales_tax), "total": _r(lc.total),
+            "shipping_known": lc.shipping_known, "domestic": lc.domestic, "notes": lc.notes,
+            "route": lc.route, "route_label": lc.route_label, "set_up": lc.set_up,
+            "lines": [[label, _r(v)] for label, v in lc.lines]}
+
+
 def quote(q: Quote) -> dict:
-    lc = q.landed
     return {
         "offer_id": q.offer.id, "store_key": q.store.key, "store": q.store.name, "country": q.store.country,
         "url": q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
         "seen": q.point.ts.isoformat(), "source": q.point.source,
-        "landed": {"item": _r(lc.item), "shipping": _r(lc.shipping), "duty": _r(lc.duty), "vat": _r(lc.vat),
-                   "fees": _r(lc.fees), "total": _r(lc.total), "shipping_known": lc.shipping_known,
-                   "domestic": lc.domestic, "notes": lc.notes},
+        "landed": landed(q.landed),
+        "routes": [landed(lc) for lc in q.routes],
     }
 
 
@@ -85,8 +122,8 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
     for o in t.db.offers(item):
         s = t.store_for(o)
         offers.append({"id": o.id, "store_key": s.key, "store": s.name, "url": o.url, "shipping": o.shipping,
-                       "shipping_currency": o.shipping_currency, "has_regex": bool(o.price_regex),
-                       "has_prices": o.id in quoted})
+                       "shipping_currency": o.shipping_currency, "local_shipping": o.local_shipping,
+                       "has_regex": bool(o.price_regex), "has_prices": o.id in quoted})
     keys = {e for o in t.db.offers(item) for e in t.store_for(o).events}
     windows = []
     if series:
@@ -95,7 +132,7 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
                 windows.append({"name": EVENTS[key].name, "start": s.isoformat(), "end": e.isoformat()})
     return {
         "id": item.id, "name": item.name, "category": item.category, "target_price": item.target_price,
-        "created_at": item.created_at,
+        "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at,
         "best": quote(quotes[0]) if quotes else None,
         "quotes": [quote(q) for q in quotes],
         "offers": offers,
@@ -114,6 +151,7 @@ def snapshot(t: Tracker, today: date | None = None) -> dict:
         "items": [item_detail(t, i, today) for i in t.db.list_items()],
         "events": events(today),
         "stores": stores(),
+        "forwarders": forwarders(t),
     }
 
 
@@ -123,6 +161,7 @@ def check_results(results: list[CheckResult]) -> list[dict]:
         d = {"offer_id": r.offer.id, "store": r.store.name, "ok": r.error is None, "error": r.error}
         if r.extraction:
             ex = r.extraction
-            d.update(price=ex.price, currency=ex.currency, in_stock=ex.in_stock, method=ex.method)
+            d.update(price=ex.price, currency=ex.currency, in_stock=ex.in_stock, method=ex.method,
+                     shipping=ex.shipping, listing=ex.url, title=ex.title)
         out.append(d)
     return out

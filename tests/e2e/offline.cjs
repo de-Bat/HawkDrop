@@ -122,6 +122,27 @@ async function api(method, path, body) {
   await shot('07-list');
   step('events + settings render');
 
+  // 10. set up a forwarder address offline; once synced, stores abroad are priced through it too
+  await context.setOffline(true);
+  await page.goto(BASE + '/#/settings');
+  await page.getByRole('button', { name: /Add a forwarder address/ }).click();
+  await page.locator('#fwd-service').selectOption('dealtas');
+  await page.fill('textarea[name=address]', 'Test User\n16 Example Rd #IL123\nNew Castle, DE 19720');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('#status .pill', { hasText: '1 pending' }).waitFor();
+  await page.getByText('New Castle, DE 19720').waitFor();
+  step('offline: forwarder address queued');
+  await context.setOffline(false);
+  await page.locator('#status .pill', { hasText: 'Synced' }).waitFor({ timeout: 30000 });
+  const fwd = await api('GET', '/api/forwarders');
+  assert.equal(fwd.accounts.length, 1);
+  assert.equal(fwd.accounts[0].sales_tax_source, 'DE address');
+  await page.goto(BASE + `/#/item/${demo.id}`);
+  await page.locator('.quote', { hasText: 'Amazon.com' }).locator('summary').first().click();
+  await page.getByText('Other ways to get it').first().waitFor();
+  await shot('08-routes');
+  step('online: forwarder synced, item shows the other routes');
+
   assert.deepEqual(errors, [], `page errors: ${errors.join('\n')}`);
   console.log('\nALL E2E CHECKS PASSED');
   await browser.close();

@@ -235,6 +235,12 @@ button.chip { cursor: pointer; padding: 6px 12px; font-size: 13px; }
 .breakdown td:last-child { text-align: right; }
 .breakdown tr.total td { font-weight: 700; border-bottom: 0; }
 .notes { margin: 0 0 8px; padding-left: 18px; }
+.via { color: var(--brand); font-weight: 600; }
+.pre { white-space: pre-line; }
+details.routes { margin: 4px 0 10px; }
+details.routes > summary { cursor: pointer; color: var(--muted); }
+details.routes li summary { cursor: pointer; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+details.routes li summary::-webkit-details-marker { display: none; }
 .quote .row { padding-bottom: 10px; }
 
 /* ---- events -------------------------------------------------------------- */

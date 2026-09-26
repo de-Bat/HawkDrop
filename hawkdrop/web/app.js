@@ -231,6 +231,30 @@ function storeLabel(it, ref) {
   return ref.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
 }
 
+function breakdown(l) {
+  const lines = l.lines && l.lines.length
+    ? l.lines.map(([label, v]) => html`<tr><td>${label[0].toUpperCase() + label.slice(1)}</td><td>${money(v)}</td></tr>`)
+    : [html`<tr><td>Shipping${l.shipping_known ? '' : ' (unknown)'}</td><td>${l.shipping_known ? money(l.shipping) : '?'}</td></tr>`,
+      l.fees ? html`<tr><td>Clearance fee</td><td>${money(l.fees)}</td></tr>` : ''];
+  return html`<table class="breakdown">
+      <tr><td>Item</td><td>${money(l.item)}</td></tr>
+      ${lines}
+      ${l.sales_tax ? html`<tr><td>US sales tax</td><td>${money(l.sales_tax)}</td></tr>` : ''}
+      ${l.duty ? html`<tr><td>Customs duty</td><td>${money(l.duty)}</td></tr>` : ''}
+      ${l.vat ? html`<tr><td>Import VAT</td><td>${money(l.vat)}</td></tr>` : ''}
+      <tr class="total"><td>Total</td><td>${money(l.total)}</td></tr>
+    </table>
+    ${l.notes.length ? html`<ul class="notes small muted">${l.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}`;
+}
+
+function otherRoutes(q) {
+  const others = (q.routes || []).slice(1);
+  if (!others.length) return '';
+  return html`<details class="routes small"><summary>Other ways to get it (${others.length})</summary>
+    <ul class="plain">${others.map((r) => html`<li><details><summary class="row between"><span>${r.route === 'direct' ? 'Direct from the store' : r.route_label}</span><b>${money(r.total)}</b></summary>${breakdown(r)}</details></li>`)}</ul>
+  </details>`;
+}
+
 function quotesSection(it) {
   const cur = currency();
   const rows = it.quotes.map((q, i) => {
@@ -239,18 +263,12 @@ function quotesSection(it) {
       <details>
         <summary>
           <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}
-            <div class="small muted">${money(q.price, q.currency)}${q.currency !== cur ? '' : ''} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div></div>
+            <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div>
+            ${l.route && l.route !== 'direct' ? html`<div class="small via">${l.route_label}</div>` : ''}</div>
           <div class="q-total">${money(l.total)}<div class="small muted">delivered</div></div>
         </summary>
-        <table class="breakdown">
-          <tr><td>Item</td><td>${money(l.item)}</td></tr>
-          <tr><td>Shipping${l.shipping_known ? '' : ' (unknown)'}</td><td>${l.shipping_known ? money(l.shipping) : '?'}</td></tr>
-          ${l.duty ? html`<tr><td>Customs duty</td><td>${money(l.duty)}</td></tr>` : ''}
-          ${l.vat ? html`<tr><td>Import VAT</td><td>${money(l.vat)}</td></tr>` : ''}
-          ${l.fees ? html`<tr><td>Clearance fee</td><td>${money(l.fees)}</td></tr>` : ''}
-          <tr class="total"><td>Total</td><td>${money(l.total)}</td></tr>
-        </table>
-        ${l.notes.length ? html`<ul class="notes small muted">${l.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}
+        ${breakdown(l)}
+        ${otherRoutes(q)}
         <div class="row gap small">
           ${q.url ? html`<a href="${q.url}" target="_blank" rel="noopener">Open store page</a>` : ''}
           <button type="button" class="link danger" data-action="remove-offer" data-offer="${q.offer_id}">Stop tracking this store</button>
@@ -358,6 +376,7 @@ function viewSettings() {
       ${pending.length ? html`<ul class="plain list">${pending}</ul>` : html`<p class="small muted">Everything is synced.</p>`}
       ${failed.length ? html`<h4>Rejected by the server</h4><ul class="plain list">${failed}</ul><button class="link small" type="button" data-action="clear-failed">clear</button>` : ''}
     </section>
+    ${forwardersCard()}
     <form class="card form" id="token-form">
       <h3>Server access</h3>
       <label>Access token <span class="small muted">(only if the server was started with --token)</span>
@@ -468,29 +487,107 @@ function logPriceSheet(it) {
   sync();
 }
 
+function ebaySearchUrl(query, condition) {
+  const p = new URLSearchParams({ _nkw: query, LH_BIN: '1', _sop: '15' });
+  if (condition === 'new') p.set('LH_ItemCondition', '1000');
+  if (condition === 'used') p.set('LH_ItemCondition', '3000');
+  return `https://www.ebay.com/sch/i.html?${p}`;
+}
+
 function addOfferSheet(it) {
   openSheet(`Add a store · ${it.name}`, html`
-    <label>Product link<input name="url" type="url" required placeholder="https://…" autocapitalize="off"></label>
+    <label>Product link<input name="url" type="url" placeholder="https://…" autocapitalize="off"></label>
+    <p class="small muted center">or</p>
+    <div class="row gap">
+      <label class="grow">Search eBay <span class="small muted">(cheapest listing)</span><input name="ebay" placeholder="${it.name}" autocomplete="off"></label>
+      <label>Condition<select name="condition"><option value="new">new</option><option value="used">used</option><option value="any">any</option></select></label>
+    </div>
     <div class="row gap">
       <label class="grow">Shipping to you <span class="small muted">(optional)</span><input name="shipping" inputmode="decimal" placeholder="store default"></label>
       <label>Currency<select name="shipping_currency"><option value="">price's</option>${['ILS', 'USD', 'EUR', 'GBP'].map((c) => html`<option>${c}</option>`)}</select></label>
     </div>
     <details class="small"><summary>Advanced</summary>
+      <label>Shipping to a forwarder's warehouse <span class="muted">(store's domestic shipping)</span><input name="local_shipping" inputmode="decimal" placeholder="store default"></label>
       <label>Price regex <span class="muted">(first group = price)</span><input name="regex" autocapitalize="off" spellcheck="false"></label></details>`,
   async (v) => {
-    const url = (v.url || '').trim();
-    if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full product link (https://…)');
-    await mutate({ type: 'add_offer', itemId: it.id, body: { url, shipping: numOrNull(v.shipping), shipping_currency: v.shipping_currency || null, regex: v.regex || null } });
-    toast('Store added');
+    let url = (v.url || '').trim();
+    const query = (v.ebay || '').trim();
+    if (url && query) throw new Error('Paste a link or search eBay, not both');
+    if (query) url = ebaySearchUrl(query, v.condition);
+    if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full product link (https://…) or type an eBay search');
+    await mutate({ type: 'add_offer', itemId: it.id, body: { url, shipping: numOrNull(v.shipping), shipping_currency: v.shipping_currency || null, local_shipping: numOrNull(v.local_shipping), regex: v.regex || null } });
+    toast(query ? 'eBay search added' : 'Store added');
   }, { submitLabel: 'Add store' });
+}
+
+function forwarderSheet() {
+  const services = (state.snapshot.forwarders && state.snapshot.forwarders.services) || [];
+  if (!services.length) { toast('Sync once to load the forwarders'); return; }
+  const whOptions = (svc) => svc.warehouses.map((w) => html`<option value="${w.code}">${w.code} · ${w.location}</option>`);
+  const describe = (svc) => {
+    const r = svc.warehouses.map((w) => `${w.code}: ${w.rate.first} ${w.rate.currency} first ${w.rate.first_kg} kg + ${w.rate.additional}/${w.rate.step_kg} kg`).join(' · ');
+    return `${svc.notes ? `${svc.notes} ` : ''}Estimated rates: ${r}.`;
+  };
+  const { form } = openSheet('Set up a package forwarder', html`
+    <label>Service<select name="forwarder" id="fwd-service">${services.map((f) => html`<option value="${f.key}">${f.name}</option>`)}</select></label>
+    <p class="small muted" id="fwd-about"></p>
+    <label>Warehouse<select name="warehouse" id="fwd-wh"></select></label>
+    <label id="fwd-address">Your address there <span class="small muted">(exactly as the service shows it)</span>
+      <textarea name="address" rows="3" placeholder="Your Name&#10;123 Warehouse Rd #IL12345&#10;City, ST 12345" autocapitalize="off"></textarea></label>
+    <div class="row gap">
+      <label class="grow" id="fwd-suite">Suite / customer no.<input name="suite" autocomplete="off" autocapitalize="off"></label>
+      <label class="grow">Sales tax <span class="small muted">(%)</span><input name="sales_tax" inputmode="decimal" placeholder="from address"></label>
+    </div>
+    <p class="small muted">Have more than one address (e.g. US and UK)? Add each warehouse separately.</p>`,
+  async (v) => {
+    const svc = services.find((f) => f.key === v.forwarder);
+    const address = (v.address || '').trim();
+    if (svc.needs_address && !address) throw new Error(`Enter the address ${svc.name} gave you`);
+    const tax = numOrNull(v.sales_tax);
+    await mutate({ type: 'save_forwarder', body: { forwarder: v.forwarder, warehouse: v.warehouse, address, suite: (v.suite || '').trim(), sales_tax: tax == null ? null : tax / 100 } });
+    toast(`${svc.name} ${v.warehouse} saved`);
+  });
+  const sel = form.querySelector('#fwd-service');
+  const update = () => {
+    const svc = services.find((f) => f.key === sel.value);
+    form.querySelector('#fwd-wh').innerHTML = str(whOptions(svc));
+    form.querySelector('#fwd-about').textContent = describe(svc);
+    form.querySelector('#fwd-address').hidden = !svc.needs_address;
+    form.querySelector('#fwd-suite').hidden = !svc.needs_address;
+  };
+  sel.onchange = update;
+  update();
+}
+
+function forwardersCard() {
+  const f = state.snapshot.forwarders || { accounts: [] };
+  const rows = (f.accounts || []).map((a) => html`<li class="row between"><div><b>${a.forwarder_name}</b> · ${a.warehouse}${a.location ? html` <span class="muted">(${a.location})</span>` : ''}${a.pending ? html` <span class="pending-dot">pending</span>` : ''}
+      <div class="small muted pre">${a.address || 'no address needed'}${a.suite ? ` · suite ${a.suite}` : ''}</div>
+      ${a.effective_sales_tax ? html`<div class="small muted">sales tax ${(a.effective_sales_tax * 100).toFixed(1)}% (${a.sales_tax_source})</div>` : ''}</div>
+      <button type="button" class="link danger small" data-action="remove-forwarder" data-forwarder="${a.forwarder}" data-warehouse="${a.warehouse}">remove</button></li>`);
+  return html`<section class="card">
+    <h3>Package forwarders</h3>
+    <p class="small muted">Buying from a store that won't ship to you, or ships expensively? Add your forwarder addresses (Dealtas, RedBox, Zipy, MyUS, Shipito…) and HawkDrop prices every store through them too, with their shipping, fees, sales tax and import tax rules.</p>
+    ${rows.length ? html`<ul class="plain list">${rows}</ul>` : ''}
+    <button class="btn wide" type="button" data-action="add-forwarder">${icon('plus')} Add a forwarder address</button>
+  </section>`;
 }
 
 function editItemSheet(it) {
   const { form, close } = openSheet(`Edit · ${it.name}`, html`
     <label>Category<select name="category">${categoryOptions(it.category)}</select></label>
-    <label>Target price (${currency()})<input name="target_price" inputmode="decimal" value="${it.target_price ?? ''}" placeholder="none"></label>`,
+    <label>Target price (${currency()})<input name="target_price" inputmode="decimal" value="${it.target_price ?? ''}" placeholder="none"></label>
+    <div class="row gap">
+      <label class="grow">Weight (kg)<input name="weight_kg" inputmode="decimal" value="${it.weight_kg ?? ''}" placeholder="for forwarders"></label>
+      <label class="grow">Box size (cm)<input name="dims" value="${it.dims ?? ''}" placeholder="30x20x10" autocapitalize="off"></label>
+    </div>
+    <p class="small muted">Weight and size set what package forwarders charge for shipping.</p>`,
   async (v) => {
-    await mutate({ type: 'update_item', itemId: it.id, body: { category: v.category, target_price: v.target_price.trim() === '' ? '' : numOrNull(v.target_price) } });
+    const dims = v.dims.trim();
+    if (dims && !/^\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?$/i.test(dims)) throw new Error('Box size looks like 30x20x10');
+    await mutate({ type: 'update_item', itemId: it.id, body: {
+      category: v.category, target_price: v.target_price.trim() === '' ? '' : numOrNull(v.target_price),
+      weight_kg: v.weight_kg.trim() === '' ? '' : numOrNull(v.weight_kg), dims } });
   }, { extra: html`<button class="btn danger" type="button" id="del-item">Stop tracking</button>` });
   form.querySelector('#del-item').onclick = async () => {
     if (!confirm(`Stop tracking “${it.name}” and delete its price history?`)) return;
@@ -523,6 +620,10 @@ async function onClick(ev) {
     case 'add-offer': if (it) addOfferSheet(it); break;
     case 'edit-item': if (it) editItemSheet(it); break;
     case 'check': if (it) checkPrices(it); break;
+    case 'add-forwarder': forwarderSheet(); break;
+    case 'remove-forwarder':
+      if (confirm('Remove this forwarder address?')) await mutate({ type: 'remove_forwarder', body: { forwarder: el.dataset.forwarder, warehouse: el.dataset.warehouse } });
+      break;
     case 'remove-offer':
       if (it && confirm('Stop tracking this store for this item?')) await mutate({ type: 'remove_offer', itemId: it.id, offerId: Number(el.dataset.offer) });
       break;
@@ -609,7 +710,7 @@ document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
 setInterval(() => { document.getElementById('status').innerHTML = str(statusPill()); }, 30000);
 
-if (state.snapshot === null) state.snapshot = { items: [], events: [], stores: [], meta: null };
+if (state.snapshot === null) state.snapshot = { items: [], events: [], stores: [], meta: null, forwarders: { services: [], accounts: [] } };
 render({ force: true });
 init();
 registerServiceWorker();

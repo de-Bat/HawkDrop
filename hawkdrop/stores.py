@@ -30,11 +30,19 @@ class StoreProfile:
     collects_import_vat: bool = False  # store charges destination VAT/duty at checkout
     notes: str = ""
     regions: tuple[str, ...] = field(default=())
+    ships_abroad: bool | None = None  # ships to you directly; False = only via a forwarder, None = unknown
+    local_shipping_flat: float | None = None  # domestic shipping, e.g. to a forwarder's warehouse
+    local_free_over: float | None = None
 
     def shipping_for(self, price: float) -> float | None:
         if self.shipping_free_over is not None and price >= self.shipping_free_over:
             return 0.0
         return self.shipping_flat
+
+    def local_shipping_for(self, price: float) -> float | None:
+        if self.local_free_over is not None and price >= self.local_free_over:
+            return 0.0
+        return self.local_shipping_flat
 
 
 STORES: dict[str, StoreProfile] = {s.key: s for s in [
@@ -51,19 +59,29 @@ STORES: dict[str, StoreProfile] = {s.key: s for s in [
     # ---- International ------------------------------------------------------
     StoreProfile("amazon_us", "Amazon.com", ("amazon.com",), "US", "USD", AMAZON_EVENTS,
                  shipping_flat=12.0, shipping_free_over=49.0, collects_import_vat=True,
-                 regions=("AMAZON", "US", "GLOBAL"),
+                 regions=("AMAZON", "US", "GLOBAL"), ships_abroad=True, local_shipping_flat=6.99,
+                 local_free_over=35.0,
                  notes="Free shipping to Israel on eligible orders over $49; import fees deposit at checkout."),
     StoreProfile("amazon_uk", "Amazon.co.uk", ("amazon.co.uk",), "UK", "GBP", AMAZON_EVENTS,
-                 shipping_flat=10.0, collects_import_vat=True, regions=("AMAZON", "UK", "GLOBAL")),
+                 shipping_flat=10.0, collects_import_vat=True, regions=("AMAZON", "UK", "GLOBAL"),
+                 ships_abroad=True, local_shipping_flat=4.49, local_free_over=35.0),
     StoreProfile("amazon_de", "Amazon.de", ("amazon.de",), "DE", "EUR", AMAZON_EVENTS,
-                 shipping_flat=12.0, collects_import_vat=True, regions=("AMAZON", "EU", "GLOBAL")),
+                 shipping_flat=12.0, collects_import_vat=True, regions=("AMAZON", "EU", "GLOBAL"),
+                 ships_abroad=True, local_shipping_flat=3.99, local_free_over=39.0),
     StoreProfile("aliexpress", "AliExpress", ("aliexpress.com", "aliexpress.us", "he.aliexpress.com"), "CN", "USD",
-                 CN_EVENTS, shipping_flat=0.0, collects_import_vat=True, regions=("CN", "GLOBAL"),
+                 CN_EVENTS, shipping_flat=0.0, collects_import_vat=True, regions=("CN", "GLOBAL"), ships_abroad=True,
                  notes="Most items ship free; VAT is collected at checkout for low-value orders."),
     StoreProfile("ebay", "eBay", ("ebay.com",), "US", "USD", US_EVENTS, regions=("US", "GLOBAL"),
-                 notes="Shipping varies per listing - set it with --shipping."),
-    StoreProfile("bhphoto", "B&H Photo", ("bhphotovideo.com",), "US", "USD", US_EVENTS, regions=("US",)),
-    StoreProfile("newegg", "Newegg", ("newegg.com",), "US", "USD", US_EVENTS, regions=("US",)),
+                 notes="Shipping varies per listing: read from the listing when possible, else set it with "
+                       "--shipping. Track a single listing or a search (cheapest match)."),
+    StoreProfile("ebay_uk", "eBay UK", ("ebay.co.uk",), "UK", "GBP", EU_EVENTS, regions=("UK", "GLOBAL"),
+                 notes="Shipping varies per listing."),
+    StoreProfile("ebay_de", "eBay.de", ("ebay.de",), "DE", "EUR", EU_EVENTS, regions=("EU", "GLOBAL"),
+                 notes="Shipping varies per listing."),
+    StoreProfile("bhphoto", "B&H Photo", ("bhphotovideo.com",), "US", "USD", US_EVENTS, regions=("US",),
+                 ships_abroad=True, local_shipping_flat=0.0),
+    StoreProfile("newegg", "Newegg", ("newegg.com",), "US", "USD", US_EVENTS, regions=("US",),
+                 ships_abroad=False, notes="Ships within the US only - use a forwarder."),
 ]}
 
 _TLD_COUNTRY = {
@@ -106,5 +124,6 @@ def resolve_store(url_or_key: str) -> StoreProfile:
 
 def with_overrides(store: StoreProfile, overrides: dict) -> StoreProfile:
     """Apply a [stores.<key>] table from config.toml."""
-    allowed = {"name", "country", "currency", "shipping_flat", "shipping_free_over", "collects_import_vat"}
+    allowed = {"name", "country", "currency", "shipping_flat", "shipping_free_over", "collects_import_vat",
+               "ships_abroad", "local_shipping_flat", "local_free_over"}
     return replace(store, **{k: v for k, v in overrides.items() if k in allowed})

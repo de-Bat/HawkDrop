@@ -52,6 +52,66 @@ def rounded(img: Image.Image, size: int) -> Image.Image:
     return icon
 
 
+def transparent_logo() -> tuple[Image.Image, Image.Image]:
+    """The full logo with its white background made transparent, plus a variant for dark pages.
+
+    Only white connected to the image border is removed, so the white feathers inside the icon stay;
+    below the icon (the wordmark) all white is background, including the holes in "a" and "e".
+    Edge pixels get "colour to alpha" against white, which keeps anti-aliasing smooth on any background.
+    """
+    img = Image.open(SRC).convert("RGB")
+    w, h = img.size
+    px = img.load()
+    whiteish = lambda p: min(p) >= 225  # noqa: E731
+    bg = bytearray(w * h)  # 1 = background reached from the border
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    stack += [(x, y) for y in range(BOX[3] + 30, h) for x in range(w) if whiteish(px[x, y])]
+    while stack:
+        x, y = stack.pop()
+        i = y * w + x
+        if bg[i] or not whiteish(px[x, y]):
+            continue
+        bg[i] = 1
+        stack.extend(n for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)) if 0 <= n[0] < w and 0 <= n[1] < h)
+    # the anti-aliased band next to the background
+    band = bytearray(bg)
+    for _ in range(3):
+        grown = bytearray(band)
+        for y in range(1, h - 1):
+            row = y * w
+            for x in range(1, w - 1):
+                i = row + x
+                if not band[i] and (band[i - 1] or band[i + 1] or band[i - w] or band[i + w]):
+                    grown[i] = 1
+        band = grown
+    out = Image.new("RGBA", (w, h))
+    op = out.load()
+    for y in range(h):
+        for x in range(w):
+            i = y * w + x
+            r, g, b = px[x, y]
+            if bg[i]:
+                op[x, y] = (255, 255, 255, 0)
+            elif band[i]:
+                a = max(255 - r, 255 - g, 255 - b) / 255
+                if a <= 0:
+                    op[x, y] = (255, 255, 255, 0)
+                else:
+                    un = tuple(max(0, min(255, round((c - 255 * (1 - a)) / a))) for c in (r, g, b))
+                    op[x, y] = (*un, round(a * 255))
+            else:
+                op[x, y] = (r, g, b, 255)
+    # dark pages: the navy "Hawk" of the wordmark becomes light; the green "Sense" and the icon stay
+    dark = out.copy()
+    dp = dark.load()
+    for y in range(BOX[3] + 30, h):
+        for x in range(w):
+            r, g, b, a = dp[x, y]
+            if a and r < 70 and g < 90 and b > g:
+                dp[x, y] = (232, 238, 247, a)
+    return out, dark
+
+
 def main():
     art = artwork()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -64,8 +124,10 @@ def main():
     inner = art.resize((410, 410), Image.LANCZOS)
     maskable.paste(inner, (51, 51))
     maskable.save(OUT / "icon-maskable-512.png", optimize=True)
-    logo = Image.open(SRC).convert("RGB")
-    logo.resize((640, 640), Image.LANCZOS).save(ROOT / "assets" / "hawksense-logo.png", optimize=True)  # 2x of the README size
+    light, dark = transparent_logo()
+    for img, name in ((light, "hawksense-logo.png"), (dark, "hawksense-logo-dark.png")):
+        # resize premultiplied so transparent pixels don't bleed a halo; 640 px = 2x the README size
+        img.convert("RGBa").resize((640, 640), Image.LANCZOS).convert("RGBA").save(ROOT / "assets" / name, optimize=True)
     print(f"wrote icons to {OUT}")
 
 

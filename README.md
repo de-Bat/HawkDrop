@@ -1,4 +1,9 @@
-<h1 align="center"><img src="assets/hawksense-logo.png" alt="HawkSense" width="320"></h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hawksense-logo-dark.png">
+    <img src="assets/hawksense-logo.png" alt="HawkSense" width="320">
+  </picture>
+</h1>
 
 <p align="center"><b>Smart price tracker: the real delivered price, and whether to buy now or wait.</b></p>
 

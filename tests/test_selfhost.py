@@ -4,9 +4,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from hawkdrop.config import Config, load_config, server_settings
-from hawkdrop.db import Database
-from hawkdrop.server import ServerContext, _next_check_delay
+from hawksense.config import Config, load_config, server_settings
+from hawksense.db import Database
+from hawksense.server import ServerContext, _next_check_delay
 
 
 class ServerSettingsTest(unittest.TestCase):
@@ -16,7 +16,7 @@ class ServerSettingsTest(unittest.TestCase):
 
     def test_precedence_cli_env_config(self):
         cfg = {"host": "10.0.0.1", "port": 1000, "check_every": 12}
-        env = {"HAWKDROP_PORT": "2000", "HAWKDROP_CHECK_EVERY": "3"}
+        env = {"HAWKSENSE_PORT": "2000", "HAWKSENSE_CHECK_EVERY": "3"}
         s = server_settings({"port": 3000}, cfg, env=env)
         self.assertEqual(s.host, "10.0.0.1")   # config
         self.assertEqual(s.port, 3000)         # CLI beats env
@@ -26,18 +26,18 @@ class ServerSettingsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "token"
             f.write_text("from-file\n")
-            s = server_settings({}, {}, env={"HAWKDROP_TOKEN_FILE": str(f), "HAWKDROP_BASE_PATH": "hawkdrop/"})
+            s = server_settings({}, {}, env={"HAWKSENSE_TOKEN_FILE": str(f), "HAWKSENSE_BASE_PATH": "hawksense/"})
             self.assertEqual(s.token, "from-file")
-            self.assertEqual(s.base_path, "/hawkdrop")
+            self.assertEqual(s.base_path, "/hawksense")
             # an explicit token wins over the file
             self.assertEqual(server_settings({"token": "cli"}, {"token_file": str(f)}, env={}).token, "cli")
 
     def test_invalid_values(self):
         with self.assertRaises(SystemExit):
-            server_settings({}, {}, env={"HAWKDROP_PORT": "eighty"})
+            server_settings({}, {}, env={"HAWKSENSE_PORT": "eighty"})
         with self.assertRaises(SystemExit):
-            server_settings({}, {}, env={"HAWKDROP_TOKEN_FILE": "/nonexistent/token"})
-        self.assertIsNone(server_settings({}, {}, env={"HAWKDROP_CHECK_EVERY": "0"}).check_every)
+            server_settings({}, {}, env={"HAWKSENSE_TOKEN_FILE": "/nonexistent/token"})
+        self.assertIsNone(server_settings({}, {}, env={"HAWKSENSE_CHECK_EVERY": "0"}).check_every)
 
     def test_config_file_server_section(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,13 +89,13 @@ class BackupCommandTest(unittest.TestCase):
         import contextlib
         import io
 
-        from hawkdrop.cli import main
+        from hawksense.cli import main
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "h.db")
             with contextlib.redirect_stdout(io.StringIO()):
                 main(["--db", db, "--offline", "track", "Thing"])
                 main(["--db", db, "--offline", "backup", os.path.join(tmp, "backups")])
-            files = list(Path(tmp, "backups").glob("hawkdrop-*.db"))
+            files = list(Path(tmp, "backups").glob("hawksense-*.db"))
             self.assertEqual(len(files), 1)
 
 

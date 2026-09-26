@@ -1,0 +1,354 @@
+{
+  "version": 1,
+  "updated": "2026-09-26",
+  "notes": "HawkSense rules feed. Installs check this file (weekly by default) and apply changes; changes over 50% wait for the user's review. Keep values in the same units as hawksense/landed.py and hawksense/forwarders.py. Forwarder rates are estimates - update them from each service's price list.",
+  "destination": {
+    "IL": {
+      "name": "Israel",
+      "currency": "ILS",
+      "vat_rate": 0.18,
+      "vat_exempt_usd": 75.0,
+      "duty_exempt_usd": 500.0,
+      "threshold_includes_shipping": false,
+      "clearance_fee": 35.0,
+      "duty_rates": {
+        "electronics": 0.0,
+        "computers": 0.0,
+        "phones": 0.0,
+        "cameras": 0.0,
+        "appliances": 0.0,
+        "toys": 0.0,
+        "clothing": 0.12,
+        "shoes": 0.12,
+        "furniture": 0.08,
+        "default": 0.06
+      }
+    },
+    "US": {
+      "name": "United States",
+      "currency": "USD",
+      "vat_rate": 0.0,
+      "vat_exempt_usd": 0.0,
+      "duty_exempt_usd": 0.0,
+      "threshold_includes_shipping": false,
+      "clearance_fee": 0.0,
+      "duty_rates": {
+        "default": 0.1
+      }
+    },
+    "EU": {
+      "name": "European Union",
+      "currency": "EUR",
+      "vat_rate": 0.21,
+      "vat_exempt_usd": 0.0,
+      "duty_exempt_usd": 160.0,
+      "threshold_includes_shipping": false,
+      "clearance_fee": 10.0,
+      "duty_rates": {
+        "electronics": 0.0,
+        "computers": 0.0,
+        "phones": 0.0,
+        "clothing": 0.12,
+        "default": 0.04
+      }
+    },
+    "UK": {
+      "name": "United Kingdom",
+      "currency": "GBP",
+      "vat_rate": 0.2,
+      "vat_exempt_usd": 0.0,
+      "duty_exempt_usd": 170.0,
+      "threshold_includes_shipping": false,
+      "clearance_fee": 8.0,
+      "duty_rates": {
+        "electronics": 0.0,
+        "computers": 0.0,
+        "clothing": 0.12,
+        "default": 0.04
+      }
+    }
+  },
+  "forwarders": {
+    "dealtas": {
+      "name": "Dealtas",
+      "currency": "USD",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": true,
+      "tax_handling_fee": 5.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Delaware",
+          "sales_tax": 0.0,
+          "transit": "7-14 days",
+          "currency": "USD",
+          "first": 13.0,
+          "additional": 5.5,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "redbox": {
+      "name": "RedBox",
+      "currency": "USD",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": true,
+      "tax_handling_fee": 5.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Delaware",
+          "sales_tax": 0.0,
+          "transit": "7-14 days",
+          "currency": "USD",
+          "first": 12.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        },
+        "UK": {
+          "country": "UK",
+          "location": "United Kingdom",
+          "sales_tax": 0.0,
+          "transit": "7-14 days",
+          "currency": "GBP",
+          "first": 11.0,
+          "additional": 4.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "zipy": {
+      "name": "Zipy (buys for you)",
+      "currency": "USD",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.07,
+      "service_fee_min": 4.0,
+      "collects_import_taxes": true,
+      "tax_handling_fee": 0.0,
+      "needs_address": false,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "United States",
+          "sales_tax": 0.0,
+          "transit": "10-20 days",
+          "currency": "USD",
+          "first": 10.0,
+          "additional": 4.5,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        },
+        "UK": {
+          "country": "UK",
+          "location": "United Kingdom",
+          "sales_tax": 0.0,
+          "transit": "10-20 days",
+          "currency": "USD",
+          "first": 12.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        },
+        "DE": {
+          "country": "DE",
+          "location": "Germany",
+          "sales_tax": 0.0,
+          "transit": "10-20 days",
+          "currency": "USD",
+          "first": 12.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        },
+        "CN": {
+          "country": "CN",
+          "location": "China",
+          "sales_tax": 0.0,
+          "transit": "14-30 days",
+          "currency": "USD",
+          "first": 6.0,
+          "additional": 3.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "myus": {
+      "name": "MyUS",
+      "currency": "USD",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": false,
+      "tax_handling_fee": 0.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Sarasota, Florida",
+          "sales_tax": 0.07,
+          "transit": "3-6 days (express)",
+          "currency": "USD",
+          "first": 24.0,
+          "additional": 6.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "shipito": {
+      "name": "Shipito",
+      "currency": "USD",
+      "handling_fee": 2.5,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": false,
+      "tax_handling_fee": 0.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Portland, Oregon",
+          "sales_tax": 0.0,
+          "transit": "5-15 days",
+          "currency": "USD",
+          "first": 19.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        },
+        "US-CA": {
+          "country": "US",
+          "location": "Torrance, California",
+          "sales_tax": 0.1,
+          "transit": "5-15 days",
+          "currency": "USD",
+          "first": 19.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "stackry": {
+      "name": "Stackry",
+      "currency": "USD",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": false,
+      "tax_handling_fee": 0.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Salem, New Hampshire",
+          "sales_tax": 0.0,
+          "transit": "4-10 days",
+          "currency": "USD",
+          "first": 18.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "planetexpress": {
+      "name": "Planet Express",
+      "currency": "USD",
+      "handling_fee": 2.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": false,
+      "tax_handling_fee": 0.0,
+      "needs_address": true,
+      "warehouses": {
+        "US": {
+          "country": "US",
+          "location": "Torrance, California",
+          "sales_tax": 0.1,
+          "transit": "4-10 days",
+          "currency": "USD",
+          "first": 17.0,
+          "additional": 5.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    },
+    "forward2me": {
+      "name": "Forward2me",
+      "currency": "GBP",
+      "handling_fee": 0.0,
+      "insurance_rate": 0.0,
+      "insurance_min": 0.0,
+      "service_fee_rate": 0.0,
+      "service_fee_min": 0.0,
+      "collects_import_taxes": false,
+      "tax_handling_fee": 0.0,
+      "needs_address": true,
+      "warehouses": {
+        "UK": {
+          "country": "UK",
+          "location": "United Kingdom",
+          "sales_tax": 0.0,
+          "transit": "3-7 days",
+          "currency": "GBP",
+          "first": 15.0,
+          "additional": 3.0,
+          "first_kg": 0.5,
+          "step_kg": 0.5,
+          "min_kg": 0.0,
+          "vol_divisor": 5000.0
+        }
+      }
+    }
+  }
+}

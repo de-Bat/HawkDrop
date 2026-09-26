@@ -7,8 +7,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from hawkdrop.config import Config
-from hawkdrop.server import ServerContext, make_server
+from hawksense.config import Config
+from hawksense.server import ServerContext, make_server
 
 
 class ServerTest(unittest.TestCase):
@@ -80,6 +80,93 @@ class ApiTest(ServerTest):
         self.assertIn("price", err["error"])
         self.assertEqual(self.call("GET", "/api/nope")[0], 404)
 
+    def test_forwarder_accounts_and_routes(self):
+        _, catalog = self.call("GET", "/api/forwarders")
+        self.assertIn("dealtas", [f["key"] for f in catalog["services"]])
+        status, err = self.call("POST", "/api/forwarders/accounts", {"forwarder": "dealtas", "warehouse": "US"})
+        self.assertEqual(status, 400)
+        self.assertIn("address", err["error"])
+        body = {"forwarder": "dealtas", "warehouse": "US", "address": "Me, 1 Rd #IL9, New Castle, DE 19720"}
+        _, res = self.call("POST", "/api/forwarders/accounts", body)
+        self.call("POST", "/api/forwarders/accounts", body)  # replayed offline change
+        self.assertEqual(len(res["accounts"]), 1)
+        self.assertEqual(res["accounts"][0]["sales_tax_source"], "DE address")
+
+        _, item = self.call("POST", "/api/items", {"name": "SSD", "category": "computers"})
+        status, item = self.call("PATCH", f"/api/items/{item['id']}", {"weight_kg": 0.3, "dims": "20 x 15 x 5"})
+        self.assertEqual((item["weight_kg"], item["dims"]), (0.3, "20x15x5"))
+        self.assertEqual(self.call("PATCH", f"/api/items/{item['id']}", {"dims": "20x15"})[0], 400)
+        _, detail = self.call("POST", f"/api/items/{item['id']}/prices",
+                              {"store": "https://www.newegg.com/p/1", "price": 120, "currency": "USD"})
+        best = detail["quotes"][0]["landed"]
+        self.assertEqual(best["route"], "dealtas:US")
+        self.assertTrue(best["lines"])
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertEqual(len(snap["forwarders"]["accounts"]), 1)
+
+        _, res = self.call("DELETE", "/api/forwarders/accounts/dealtas/US")
+        self.assertEqual(res["accounts"], [])
+        self.assertEqual(self.call("DELETE", "/api/forwarders/accounts/dealtas/US")[0], 200)
+        _, detail = self.call("GET", f"/api/items/{item['id']}")
+        self.assertEqual(detail["quotes"][0]["landed"]["route"], "direct")
+        _, cleared = self.call("PATCH", f"/api/items/{item['id']}", {"weight_kg": ""})
+        self.assertIsNone(cleared["weight_kg"])
+
+    def test_rules_endpoints(self):
+        _, summary = self.call("GET", "/api/rules")
+        self.assertEqual(summary["destination"], "IL")
+        self.assertTrue(any(v["path"] == "destination.IL.vat_rate" for v in summary["values"]))
+        status, err = self.call("POST", "/api/rules/manual", {"changes": {"IL.vat_rate": 5}})
+        self.assertEqual(status, 400)
+        _, summary = self.call("POST", "/api/rules/manual", {"changes": {"IL.vat_exempt_usd": 150}})
+        row = next(v for v in summary["values"] if v["path"] == "destination.IL.vat_exempt_usd")
+        self.assertEqual((row["value"], row["from"]), (150, "manual"))
+        _, meta = self.call("GET", "/api/meta")
+        self.assertEqual(meta["destination"]["vat_exempt_usd"], 150)  # used for pricing right away
+        self.assertEqual(self.call("POST", "/api/rules/changes/999/accept")[0], 200)  # replay-safe
+
+    def test_notification_endpoints(self):
+        _, n = self.call("GET", "/api/notifications")
+        self.assertEqual(n["unread"], 0)
+        self.assertIn("telegram", [c["key"] for c in n["channels"]])
+        _, n = self.call("PUT", "/api/notify/settings", {"subscriptions": {"buy_now": ["inbox", "telegram"]},
+                                                         "settings": {"price_drop_pct": 8}})
+        self.assertEqual(n["subscriptions"]["buy_now"], ["inbox", "telegram"])
+        self.assertEqual(n["settings"]["price_drop_pct"], 8)
+        self.assertEqual(self.call("PUT", "/api/notify/settings", {"subscriptions": {"x": []}})[0], 400)
+        self.assertEqual(self.call("POST", "/api/notify/test", {"channel": "telegram"})[0], 400)  # not configured
+        self.call("POST", "/api/notify/test", {"channel": "inbox"})
+        _, n = self.call("GET", "/api/notifications")
+        self.assertEqual(n["unread"], 1)
+        _, n = self.call("POST", "/api/notifications/read", {})
+        self.assertEqual(n["unread"], 0)
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertIn("notifications", snap)
+        self.assertIn("rules", snap)
+
+    def test_item_specs_and_mute(self):
+        _, item = self.call("POST", "/api/items", {"name": "Mouse"})
+        self.assertIsNone(item["specs"]["status"])
+        _, item = self.call("PATCH", f"/api/items/{item['id']}", {"muted": True, "weight_kg": 0.2})
+        self.assertTrue(item["muted"])
+        self.assertEqual(item["specs"]["weight_source"], "manual")
+
+    def test_settings_endpoints(self):
+        _, view = self.call("GET", "/api/settings")
+        self.assertIn("telegram", [s["key"] for s in view["sections"]])
+        status, err = self.call("PUT", "/api/settings", {"changes": {"advisor.max_wait_days": 9999}})
+        self.assertEqual(status, 400)
+        _, view = self.call("PUT", "/api/settings", {"changes": {
+            "destination.code": "US", "notify.telegram.bot_token": "123:secret", "notify.telegram.chat_id": "7"}})
+        self.assertNotIn("123:secret", json.dumps(view))
+        self.assertTrue(next(s for s in view["sections"] if s["key"] == "telegram")["configured"])
+        _, meta = self.call("GET", "/api/meta")
+        self.assertEqual(meta["destination"]["currency"], "USD")  # applies without a restart
+        _, n = self.call("GET", "/api/notifications")
+        self.assertTrue(next(c for c in n["channels"] if c["key"] == "telegram")["configured"])
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertIn("settings", snap)
+
     def test_demo_has_history_and_windows(self):
         _, item = self.call("POST", "/api/demo")
         self.assertGreater(len(item["history"]), 100)
@@ -112,8 +199,8 @@ class TokenTest(ServerTest):
 
     def test_token_required_for_api_only(self):
         self.assertEqual(self.call("GET", "/api/snapshot")[0], 401)
-        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "wrong"})[0], 401)
-        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "s3cret"})[0], 200)
+        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkSense-Token": "wrong"})[0], 401)
+        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkSense-Token": "s3cret"})[0], 200)
         self.assertEqual(self.call("GET", "/api/snapshot?token=s3cret")[0], 200)
         self.assertEqual(self.call("GET", "/")[0], 200)
 
@@ -124,19 +211,19 @@ class TokenTest(ServerTest):
 
 
 class BasePathTest(ServerTest):
-    base_path = "/hawkdrop"
+    base_path = "/hawksense"
 
     def test_prefixed_routes(self):
-        self.assertEqual(self.call("GET", "/hawkdrop/api/health")[0], 200)
-        self.assertEqual(self.call("GET", "/hawkdrop/")[0], 200)
-        self.assertEqual(self.call("GET", "/hawkdrop/sw.js")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/api/health")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/sw.js")[0], 200)
         self.assertEqual(self.call("GET", "/api/health")[0], 404)
-        req = urllib.request.Request(self.base + "/hawkdrop?token=x")
+        req = urllib.request.Request(self.base + "/hawksense?token=x")
         opener = urllib.request.build_opener(NoRedirect)
         with self.assertRaises(urllib.error.HTTPError) as cm:
             opener.open(req)
         self.assertEqual(cm.exception.code, 308)
-        self.assertEqual(cm.exception.headers["Location"], "/hawkdrop/?token=x")
+        self.assertEqual(cm.exception.headers["Location"], "/hawksense/?token=x")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

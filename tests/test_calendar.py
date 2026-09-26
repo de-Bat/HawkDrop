@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from hawkdrop.calendar_events import EVENTS, black_friday, passover, rosh_hashana, upcoming_events
+from hawksense.calendar_events import EVENTS, black_friday, passover, rosh_hashana, upcoming_events
 
 
 class HebrewCalendarTest(unittest.TestCase):

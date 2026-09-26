@@ -11,3 +11,5 @@ README.md
 pyproject.toml
 scripts/
 deploy/
+assets/
+rules/

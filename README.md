@@ -1,4 +1,6 @@
-# HawkDrop 🦅
+<p align="center"><img src="assets/hawksense-logo.png" alt="HawkSense" width="240"></p>
+
+# HawkSense
 
 A smart price tracker for Israeli shoppers (and anyone else). It tracks one item across
 several online stores, local or worldwide, and compares the **real delivered price**:
@@ -6,8 +8,20 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
 **buy now or wait** for an upcoming sales day, with a confidence score.
 
 - **Multi-store tracking**: KSP, Ivory, Bug, LastPrice, Payngo, ACE, Zap, Amazon (US/UK/DE),
-  AliExpress, eBay, B&H, Newegg. Any other shop works too, with country and currency guessed
-  from the domain.
+  AliExpress, eBay (US/UK/DE), B&H, Newegg. Any other shop works too, with country and currency
+  guessed from the domain.
+- **eBay**: track a single listing, or a *search* that follows the cheapest matching
+  buy-it-now listing (price + shipping). Uses eBay's official API when you add keys.
+- **Package forwarders**: Dealtas, RedBox, Zipy, MyUS, Shipito, Stackry, Planet Express and
+  Forward2me. Add the addresses they gave you (US, UK, ...) and every store abroad is also
+  priced through them, each by its own rules: weight-based rates, volumetric weight, handling,
+  insurance and service fees, US sales tax at the warehouse's state, and who pays import tax.
+- **Weight and size from the store pages**, cross-checked between stores, with an alert
+  when they're missing or disagree.
+- **Rules that stay current**: taxes and forwarder rates are checked for updates
+  automatically, odd changes wait for your OK, and you can change any of them by hand.
+- **Notifications** by email, Telegram, WhatsApp, ntfy push, webhook or in the app, for the
+  events you pick: buy now, target reached, price drops, upcoming sales, rule changes, and more.
 - **Landed cost**: Israeli import rules by default: 18% VAT above the personal-import
   exemption, customs duty per category above $500, and a courier clearance fee when taxes
   are collected on arrival. Stores that charge VAT at checkout (Amazon, AliExpress) are
@@ -21,38 +35,258 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
 - **Web app / iOS PWA** that works fully offline and syncs changes when you're back online.
 - No dependencies. Python 3.11+ and SQLite.
 
+> HawkSense was previously called HawkDrop. Old `HAWKDROP_*` environment variables and an
+> existing `~/.hawkdrop` data folder keep working.
+
 ## Install
 
 ```bash
-pip install .          # or run in place: python -m hawkdrop ...
+pip install .          # or run in place: python -m hawksense ...
 ```
 
 ## Quick start
 
 ```bash
-hawkdrop demo                     # a demo item with 14 months of synthetic history
+hawksense demo                     # a demo item with 14 months of synthetic history
 
-hawkdrop track "Sony WH-1000XM5" --category electronics --target 1100 \
+hawksense track "Sony WH-1000XM5" --category electronics --target 1100 \
     --url https://ksp.co.il/web/item/XXXX \
     --url https://www.amazon.com/dp/XXXX \
     --url https://www.aliexpress.com/item/XXXX.html
 
-hawkdrop check                    # fetch prices now (put it in cron: 0 */6 * * * hawkdrop check)
-hawkdrop compare "WH-1000XM5"     # landed-cost table
-hawkdrop advise  "WH-1000XM5"     # buy now or wait?
-hawkdrop history "WH-1000XM5"     # sparkline of the best landed price
-hawkdrop events --region IL       # upcoming sales days
+hawksense check                    # fetch prices now (put it in cron: 0 */6 * * * hawksense check)
+hawksense compare "WH-1000XM5"     # landed-cost table
+hawksense advise  "WH-1000XM5"     # buy now or wait?
+hawksense history "WH-1000XM5"     # sparkline of the best landed price
+hawksense events --region IL       # upcoming sales days
 ```
 
 Some sites block bots (captcha) or have no machine-readable price. You can either:
 
 ```bash
-hawkdrop price "WH-1000XM5" ivory 1449 --shipping 29       # record a price manually
-hawkdrop add-offer "WH-1000XM5" https://shop.co.il/p/1 --regex 'class="price">([\d,.]+)'
+hawksense price "WH-1000XM5" ivory 1449 --shipping 29       # record a price manually
+hawksense add-offer "WH-1000XM5" https://shop.co.il/p/1 --regex 'class="price">([\d,.]+)'
 ```
 
 `--shipping` on `add-offer` or `price` overrides a store's shipping policy. Unknown shipping is
 flagged with `?` in `compare`.
+
+## eBay
+
+```bash
+hawksense add-offer "WH-1000XM5" https://www.ebay.com/itm/123456789012     # one listing
+hawksense add-offer "WH-1000XM5" --ebay-search "sony wh-1000xm5" --condition new   # cheapest match
+hawksense add-offer "WH-1000XM5" --ebay-search "sony wh-1000xm5" --ebay-site ebay.de
+```
+
+A search re-runs on every `check` and records the cheapest buy-it-now listing, counting its
+shipping. `check` prints which listing it was. You can also paste any eBay search URL.
+
+Without API keys HawkSense reads the public pages, which eBay sometimes blocks. For reliable
+prices, and shipping costs quoted **to your country**, create a free developer account at
+[developer.ebay.com](https://developer.ebay.com), make a production keyset, and add:
+
+```toml
+[ebay]
+client_id = "YourApp-PRD-..."
+client_secret = "PRD-..."
+```
+
+(or set `HAWKSENSE_EBAY_CLIENT_ID` / `HAWKSENSE_EBAY_CLIENT_SECRET`).
+
+## Package forwarders
+
+Many stores don't ship to Israel, or charge a lot for it. With a package forwarder you get a
+personal address at its warehouse abroad, the store ships there, and the forwarder sends it
+on. HawkSense prices every foreign store both ways, direct and through each forwarder you've
+set up, and uses the cheapest.
+
+```bash
+hawksense forwarders                    # services, their warehouses, fees and rates
+hawksense forwarder add dealtas         # asks for the address it gave you
+hawksense forwarder add redbox          # asks for each warehouse: US, UK (skip what you don't use)
+hawksense forwarder add zipy            # buy-for-me service: no address needed
+hawksense forwarder add shipito --warehouse US --address "Your Name, 1 Rd #123, Portland, OR 97230"
+
+hawksense track "WH-1000XM5" --weight 0.9 --dims 26x22x9   # improves shipping estimates
+hawksense compare "WH-1000XM5" --routes    # every route, itemised
+hawksense compare "WH-1000XM5" --explore   # also price services you haven't set up
+```
+
+| Service | Warehouses | Notable rules |
+|---|---|---|
+| Dealtas | US (Delaware) | no sales tax; customs cleared and taxes billed through the service |
+| RedBox | US (Delaware), UK | taxes billed through the service |
+| Zipy | US, UK, DE, CN | buys for you (no address); service fee on the order; taxes included |
+| MyUS | US (Florida) | 7% FL sales tax; express courier collects taxes and adds a clearance fee |
+| Shipito | US (Oregon), US-CA (California) | Oregon is sales-tax free; handling fee |
+| Stackry | US (New Hampshire) | no sales tax |
+| Planet Express | US (California) | CA sales tax; handling fee |
+| Forward2me | UK | UK prices include 20% VAT |
+
+How a forwarded price is built:
+
+1. the store price, plus the store's **domestic shipping** to the warehouse (for example
+   Amazon.com is free over $35; override with `add-offer --local-shipping`),
+2. **US sales tax** for the warehouse's state. HawkSense reads the state from your address,
+   so `..., New Castle, DE 19720` means 0%. Override with `--sales-tax`,
+3. the forwarder's **rate card**: price for the first weight step plus each extra step,
+   charged on the greater of actual and volumetric weight (L×W×H / 5000). The weight and size
+   come from the store pages (see [Weight and size](#weight-and-size)) or from you. If neither
+   is known, a typical weight for the item's category is assumed and flagged,
+4. **handling, insurance and service fees** as the service charges them,
+5. **Israeli import tax** on goods + shipping, with the same exemptions as direct orders.
+   It's paid either through the service (plus its fee) or to the courier (plus its clearance fee).
+
+`compare` shows which address to ship the order to. In the web app, add forwarders under
+**Settings → Package forwarders** (works offline too), and set weight and box size in an
+item's edit sheet.
+
+> The forwarder rates and fees are rough estimates and change often. Check each service's
+> current price list and override them in config.toml (see below). Stores that aren't
+> built in are assumed to ship to you directly unless you set `ships_abroad = false`.
+
+## Weight and size
+
+Forwarders charge by weight, so every `check` also reads the weight and size from each store
+page. It looks at structured product data, spec tables ("Item Weight", "Package Dimensions")
+and Hebrew spec lists ("משקל", "מידות"), in g/kg/lb/oz and cm/mm/inches. Then it compares the
+pages:
+
+| Result | Meaning | What HawkSense does |
+|---|---|---|
+| verified | two or more pages agree (within 15%) | uses it |
+| unverified | only one page had it | uses it, marked as unverified |
+| conflict | pages disagree | uses the **larger** value, so shipping isn't underestimated, and **alerts you** |
+| missing | no page had it | uses a typical weight for the category and **alerts you** |
+
+Boxed (package/shipping) weights beat product weights. With only a product weight, ~10% plus
+0.1 kg is added for the box. A value you set yourself is never overwritten.
+
+```bash
+hawksense specs "WH-1000XM5"                                   # what each page said, and the result
+hawksense specs "WH-1000XM5" --source https://maker.example/wh-1000xm5   # cross-check another page
+hawksense track "WH-1000XM5" --weight 1.1 --dims 26x22x9       # set it yourself
+```
+
+`check` prints a ⚠ line when the size is missing or disputed, and the `specs_alert`
+notification tells you too. In the web app, the item page has a **Weight & size** card
+showing what each page said.
+
+## Keeping taxes and forwarder rates current
+
+Tax rules and price lists change, so HawkSense checks for updates:
+
+- **The rules feed.** [`rules/rules.json`](rules/rules.json) in this repository holds the
+  current customs rules and forwarder rates. `hawksense serve` checks it every 7 days
+  (`--rules-every DAYS`, 0 = never); `hawksense rules check` checks it now. Update that file
+  when rules change, and every install picks it up. Point `[rules] feed_url` at your own
+  copy, or set it to `""` to turn the feed off.
+- **Page sources** you add: an official customs page or a forwarder's price page, read with
+  a regex (one number) or as a weight/price table:
+
+```toml
+[rules.sources.il_exemption]
+url = "https://..."                       # the page with the current exemption
+target = "destination.IL.vat_exempt_usd"
+regex = 'up to \$\s*(\d+)'               # first group = the value
+
+[rules.sources.dealtas_rates]
+url = "https://..."                       # a page with a weight/price table
+target = "forwarders.dealtas.warehouses.US"
+format = "table"                          # sets first, first_kg, step_kg, additional
+```
+
+Every fetched value is checked for range before use. A value that moves more than 50% is held
+for review, and you're notified (`rules_review`). Applied changes are also notified
+(`rules_changed`).
+
+```bash
+hawksense rules show                 # values that differ from built-in, and where each comes from
+hawksense rules show IL --all        # every Israeli customs value
+hawksense rules check                # check the feed and sources now
+hawksense rules pending              # changes waiting for you
+hawksense rules accept 12            # (or reject 12)
+hawksense rules set IL.vat_exempt_usd 150       # manual update
+hawksense rules set IL.duty_rates.clothing 12%
+hawksense rules set dealtas.US.first 12.5       # forwarder rate (warehouse currency)
+hawksense rules unset IL.vat_exempt_usd
+hawksense rules history
+```
+
+Precedence, lowest to highest: built-in, fetched, `config.toml`, manual. In the web app,
+**Settings → Taxes & forwarder rates** edits the same values (also offline), shows where
+each comes from, and lists changes to review.
+
+## Notifications
+
+Pick which events you want, and where each one goes:
+
+| Event | When |
+|---|---|
+| `buy_now` | an item's advice changes to buy now |
+| `target_hit` | the best delivered price reaches your target |
+| `price_drop` | the best delivered price drops by 5% or more (`price_drop_pct`) |
+| `sale_soon` | a sales day for your items' stores starts within 3 days (`sale_soon_days`) |
+| `rules_changed` | taxes or forwarder rates were updated automatically |
+| `rules_review` | a fetched change looks odd and needs your OK |
+| `specs_alert` | an item's weight/size is missing or the store pages disagree |
+| `check_failed` | a store's price couldn't be read 3 times in a row (`check_failed_after`) |
+
+Set channels up in the app (**Settings → Notifications → Channels**, with a test button) or in
+`config.toml`. Secrets can also come from environment variables,
+named `HAWKSENSE_<CHANNEL>_<FIELD>`, e.g. `HAWKSENSE_TELEGRAM_BOT_TOKEN` or
+`HAWKSENSE_EMAIL_PASSWORD`.
+
+```toml
+[notify]
+app_url = "https://hawksense.example.com"    # adds links to messages (optional)
+
+[notify.telegram]        # talk to @BotFather to create a bot, send it a message,
+bot_token = "123:ABC"    # then read chat_id from https://api.telegram.org/bot<token>/getUpdates
+chat_id = "123456789"
+
+[notify.whatsapp]        # free: CallMeBot (get a key: https://www.callmebot.com/blog/free-api-whatsapp-messages/)
+provider = "callmebot"
+phone = "+972501234567"
+apikey = "123456"
+# or Twilio: provider = "twilio", account_sid, auth_token, sender = "+1415...", to = "+9725..."
+
+[notify.email]
+host = "smtp.gmail.com"  # Gmail needs an app password
+port = 587               # 465 = SSL
+username = "me@gmail.com"
+password = "app-password"
+to = "me@gmail.com"      # sender defaults to username
+
+[notify.ntfy]            # free push notifications to the ntfy app (iOS/Android/desktop)
+topic = "hawksense-pick-a-long-secret-name"
+# server = "https://ntfy.sh", token = "..." for a private server
+
+[notify.webhook]         # anything else: Slack/Discord-compatible bridges, Home Assistant, n8n ...
+url = "https://..."
+```
+
+```bash
+hawksense notify                                  # channels, and which events go where
+hawksense notify subscribe buy_now inbox telegram whatsapp
+hawksense notify subscribe all inbox ntfy         # every event
+hawksense notify subscribe sale_soon              # no channels = off
+hawksense notify set price_drop_pct 8
+hawksense notify test telegram
+hawksense notify inbox                            # read in the terminal
+```
+
+Events are raised after every price check (`check`, the server's scheduled checks, or
+**Check** in the app) and every rules check. Each event is sent once, not repeated at the
+next check. By default events only go to the in-app inbox; you opt in to each channel. You
+can mute a single item in its edit sheet.
+
+In the web app: a bell in the header shows unread notifications, and **Settings →
+Notifications** has the event × channel grid, test buttons and **Alerts on this device**.
+That shows system notifications on your phone or computer while HawkSense is open or
+recently used. When the app is fully closed, use Telegram, WhatsApp, ntfy or email: web push
+would need extra dependencies.
 
 ## Example advice
 
@@ -74,8 +308,8 @@ flagged with `?` in `compare`.
 ## Web app and iPhone app (PWA)
 
 ```bash
-hawkdrop serve                                    # http://localhost:8765
-hawkdrop serve --host 0.0.0.0 --token MYSECRET --check-every 6   # reachable from your phone
+hawksense serve                                    # http://localhost:8765
+hawksense serve --host 0.0.0.0 --token MYSECRET --check-every 6   # reachable from your phone
 ```
 
 To run it permanently on a home server, NAS or VPS, see [Self-hosting](#self-hosting).
@@ -100,7 +334,7 @@ calendar. From it you can log prices, add stores and track new items.
    - [Tailscale](https://tailscale.com/kb/1312/serve): `tailscale serve 8765` gives you
      `https://<machine>.<tailnet>.ts.net`;
    - a Cloudflare Tunnel;
-   - your own certificate: `hawkdrop serve --host 0.0.0.0 --cert cert.pem --key key.pem`.
+   - your own certificate: `hawksense serve --host 0.0.0.0 --cert cert.pem --key key.pem`.
      [mkcert](https://github.com/FiloSottile/mkcert) works, but you need to install its root
      CA on the iPhone.
 2. Open the URL in **Safari** (add `?token=…` if you started the server with `--token`).
@@ -114,31 +348,31 @@ prices keep updating while your phone is offline.
 
 ## Self-hosting
 
-HawkDrop is a single process with a SQLite file. It needs no external database or
+HawkSense is a single process with a SQLite file. It needs no external database or
 services and runs well on a Raspberry Pi, a NAS or a small VPS.
 
 ### Docker Compose (recommended)
 
 ```bash
 git clone https://github.com/de-Bat/HawkDrop && cd HawkDrop
-cp .env.example .env            # set HAWKDROP_TOKEN (openssl rand -hex 24)
+cp .env.example .env            # set HAWKSENSE_TOKEN (openssl rand -hex 24)
 docker compose up -d            # http://<server>:8765/?token=<token>
 ```
 
 For the iPhone app you need HTTPS. If you have a domain pointing at the server (ports 80
-and 443 open), set `HAWKDROP_DOMAIN` in `.env` and start the bundled Caddy, which gets and
+and 443 open), set `HAWKSENSE_DOMAIN` in `.env` and start the bundled Caddy, which gets and
 renews a Let's Encrypt certificate automatically:
 
 ```bash
-docker compose --profile https up -d   # https://<HAWKDROP_DOMAIN>/?token=<token>
+docker compose --profile https up -d   # https://<HAWKSENSE_DOMAIN>/?token=<token>
 ```
 
 Useful commands:
 
 ```bash
-docker compose logs -f hawkdrop                          # logs (incl. scheduled checks)
-docker compose exec hawkdrop hawkdrop check              # fetch prices now
-docker compose exec hawkdrop hawkdrop backup /data/backups   # consistent backup, safe while running
+docker compose logs -f hawksense                          # logs (incl. scheduled checks)
+docker compose exec hawksense hawksense check              # fetch prices now
+docker compose exec hawksense hawksense backup /data/backups   # consistent backup, safe while running
 docker compose pull && docker compose up -d --build      # update
 ```
 
@@ -150,9 +384,9 @@ Docker's `HEALTHCHECK`, and shuts down cleanly on `docker stop`. Put a `config.t
 Plain Docker works too:
 
 ```bash
-docker build -t hawkdrop .
-docker run -d --name hawkdrop -p 8765:8765 -v hawkdrop-data:/data \
-  -e HAWKDROP_TOKEN=change-me -e HAWKDROP_CHECK_EVERY=6 --restart unless-stopped hawkdrop
+docker build -t hawksense .
+docker run -d --name hawksense -p 8765:8765 -v hawksense-data:/data \
+  -e HAWKSENSE_TOKEN=change-me -e HAWKSENSE_CHECK_EVERY=6 --restart unless-stopped hawksense
 ```
 
 ### HTTPS without a public domain
@@ -163,27 +397,27 @@ docker run -d --name hawkdrop -p 8765:8765 -v hawkdrop-data:/data \
 - **Caddy with an internal CA**: use the `tls internal` block in `deploy/Caddyfile`, then
   install Caddy's root certificate on the iPhone and enable it under Settings → General →
   About → Certificate Trust Settings.
-- **Cloudflare Tunnel**: point a tunnel at `http://hawkdrop:8765`.
+- **Cloudflare Tunnel**: point a tunnel at `http://hawksense:8765`.
 
 ### Behind your own reverse proxy / on a sub-path
 
 The web app uses only relative URLs, so it works at the root of a domain or under a path
-like `https://home.example.com/hawkdrop/`:
+like `https://home.example.com/hawksense/`:
 
-- if the proxy **strips** the prefix (Caddy `handle_path`, nginx `location /hawkdrop/ {
+- if the proxy **strips** the prefix (Caddy `handle_path`, nginx `location /hawksense/ {
   proxy_pass http://127.0.0.1:8765/; }`), nothing else is needed;
-- if it forwards the path unchanged, set `HAWKDROP_BASE_PATH=/hawkdrop`.
+- if it forwards the path unchanged, set `HAWKSENSE_BASE_PATH=/hawksense`.
 
-When a proxy is in front, set `HAWKDROP_BIND=127.0.0.1` in `.env` so port 8765 isn't
+When a proxy is in front, set `HAWKSENSE_BIND=127.0.0.1` in `.env` so port 8765 isn't
 exposed directly.
 
 ### Without Docker (systemd)
 
 ```bash
-sudo python3 -m venv /opt/hawkdrop && sudo /opt/hawkdrop/bin/pip install .
-sudo cp deploy/hawkdrop.service /etc/systemd/system/
-echo "HAWKDROP_TOKEN=$(openssl rand -hex 24)" | sudo tee /etc/hawkdrop.env && sudo chmod 600 /etc/hawkdrop.env
-sudo systemctl enable --now hawkdrop     # data in /var/lib/hawkdrop, logs: journalctl -u hawkdrop
+sudo python3 -m venv /opt/hawksense && sudo /opt/hawksense/bin/pip install .
+sudo cp deploy/hawksense.service /etc/systemd/system/
+echo "HAWKSENSE_TOKEN=$(openssl rand -hex 24)" | sudo tee /etc/hawksense.env && sudo chmod 600 /etc/hawksense.env
+sudo systemctl enable --now hawksense     # data in /var/lib/hawksense, logs: journalctl -u hawksense
 ```
 
 ### Server settings
@@ -194,16 +428,20 @@ environment variable, which wins over the config file.
 
 | Flag | Environment | Default | |
 |---|---|---|---|
-| `--host` | `HAWKDROP_HOST` | `127.0.0.1` | `0.0.0.0` (or `::`) to listen on the network |
-| `--port` | `HAWKDROP_PORT` | `8765` | |
-| `--token` / `--token-file` | `HAWKDROP_TOKEN` / `HAWKDROP_TOKEN_FILE` | none | access token (file: e.g. Docker secret) |
-| `--check-every` | `HAWKDROP_CHECK_EVERY` | off | hours between automatic price checks; the schedule survives restarts |
-| `--cert` / `--key` | `HAWKDROP_CERT` / `HAWKDROP_KEY` | none | serve HTTPS directly |
-| `--base-path` | `HAWKDROP_BASE_PATH` | none | URL prefix if the proxy doesn't strip it |
-| `--db` | `HAWKDROP_DB` | `$HAWKDROP_HOME/hawkdrop.db` | |
-| `--dest` | `HAWKDROP_DEST` | `IL` | destination country for taxes |
-| | `HAWKDROP_HOME` | `~/.hawkdrop` | data + `config.toml` directory |
-| | `HAWKDROP_CONFIG` | `$HAWKDROP_HOME/config.toml` | |
+| `--host` | `HAWKSENSE_HOST` | `127.0.0.1` | `0.0.0.0` (or `::`) to listen on the network |
+| `--port` | `HAWKSENSE_PORT` | `8765` | |
+| `--token` / `--token-file` | `HAWKSENSE_TOKEN` / `HAWKSENSE_TOKEN_FILE` | none | access token (file: e.g. Docker secret) |
+| `--check-every` | `HAWKSENSE_CHECK_EVERY` | off | hours between automatic price checks; the schedule survives restarts |
+| `--cert` / `--key` | `HAWKSENSE_CERT` / `HAWKSENSE_KEY` | none | serve HTTPS directly |
+| `--base-path` | `HAWKSENSE_BASE_PATH` | none | URL prefix if the proxy doesn't strip it |
+| `--rules-every` | `HAWKSENSE_RULES_EVERY` | `7` | days between automatic rules checks (0 = off) |
+
+`--check-every` and `--rules-every` are only starting values. An interval set in the app
+(**Settings → Automatic checks**) replaces them without a restart.
+| `--db` | `HAWKSENSE_DB` | `$HAWKSENSE_HOME/hawksense.db` | |
+| `--dest` | `HAWKSENSE_DEST` | `IL` | destination country for taxes |
+| | `HAWKSENSE_HOME` | `~/.hawksense` | data + `config.toml` directory |
+| | `HAWKSENSE_CONFIG` | `$HAWKSENSE_HOME/config.toml` | |
 
 Security notes:
 
@@ -220,7 +458,7 @@ Security notes:
 2. **Trend and noise.** Log-linear regression over the last 90 days, damped and capped so a
    short slide is not extrapolated too far.
 3. **Events.** For every sales event in the next 75 days that one of the item's stores takes
-   part in, HawkDrop starts from a category prior: P(item discounted), and the typical
+   part in, HawkSense starts from a category prior: P(item discounted), and the typical
    discount depth. It then updates that prior with what this item did in past occurrences of
    the event: the drop against the median of the 35 days before it.
 4. **Simulation.** 4,000 correlated price paths. The events share a price-level random walk
@@ -228,7 +466,7 @@ Security notes:
    buy at the first one below the trigger price" is scored by its expected saving *net of
    waiting cost*. The waiting cost (0.06%/day by default) stands for the risks of rising
    prices, stock-outs and going without the item.
-5. **Decision.** HawkDrop recommends WAIT when the best strategy saves money on average
+5. **Decision.** HawkSense recommends WAIT when the best strategy saves money on average
    *and* is more likely than not to beat today's price. Otherwise it says BUY NOW. Hitting
    your `--target`, or being at the historical low, favours buying.
 6. **Confidence.** The probability behind the decision, shrunk toward 50% when data is thin:
@@ -236,7 +474,31 @@ Security notes:
 
 ## Configuration
 
-`~/.hawkdrop/config.toml` (set `HAWKDROP_HOME` to move it):
+Nearly everything can be set in the app under **Settings**:
+
+- general: destination and app address
+- notification channels, with test buttons
+- which events go to which channel
+- package forwarders
+- taxes and forwarder rates
+- automatic check intervals, the rules feed and rule sources
+- buy/wait advice settings
+- per-store shipping policies
+- eBay API keys
+
+Some rules for settings saved in the app:
+
+- They're stored on your server, override `config.toml`, and apply immediately. Changing the
+  check interval doesn't need a restart.
+- Passwords, tokens and keys are write-only: the app shows that one is saved but never gets
+  it back from the server. They also can't be saved while offline, so they never sit in the
+  offline queue.
+- A value set by an environment variable (e.g. `HAWKSENSE_TELEGRAM_BOT_TOKEN`) wins, and the
+  app shows it as locked.
+- `hawksense settings` shows the same settings in the terminal, and `hawksense settings set
+  notify.telegram.chat_id 123` changes one.
+
+You can also use a config file, `~/.hawksense/config.toml` (set `HAWKSENSE_HOME` to move it):
 
 ```toml
 [destination]
@@ -258,13 +520,45 @@ wait_cost_per_day = 0.0006  # ... plus 0.06% per day of waiting
 [stores.amazon_us]
 shipping_flat = 15
 shipping_free_over = 49
+local_shipping_flat = 6.99   # to a forwarder's warehouse
+local_free_over = 35
+
+[stores."shop.example.com"]  # a store that isn't built in
+ships_abroad = false         # only reachable through a forwarder
+
+[forwarders.dealtas]
+tax_handling_fee = 5         # in the service's currency
+handling_fee = 0
+insurance_rate = 0.02        # 2% of the goods value
+insurance_min = 3
+
+[forwarders.dealtas.warehouses.US]
+first = 12.5                 # first 0.5 kg, in the warehouse's currency
+additional = 5               # each extra 0.5 kg
+first_kg = 0.5
+step_kg = 0.5
+min_kg = 0
+vol_divisor = 5000           # cm³ per kg; 0 turns off volumetric weight
+sales_tax = 0
+
+[forwarders.myforwarder]     # a service that isn't built in
+name = "My Forwarder"
+currency = "USD"
+collects_import_taxes = false
+
+[forwarders.myforwarder.warehouses.US]
+country = "US"
+location = "Wilmington, DE"
+currency = "USD"
+first = 15
+additional = 4
 ```
 
 > Tax thresholds, rates and store shipping policies change. The built-in values are
 > estimates, not tax advice. Check them and override them in the config.
 
 Exchange rates come from the ECB via frankfurter.app and are cached for 12 hours. If you're
-offline, HawkDrop falls back to built-in approximate rates.
+offline, HawkSense falls back to built-in approximate rates.
 
 ## Development
 
@@ -272,12 +566,12 @@ offline, HawkDrop falls back to built-in approximate rates.
 python -m unittest discover -s tests          # unit + API tests
 
 # browser test of the web app, including full offline use (needs Playwright + Chromium)
-HAWKDROP_HOME=$(mktemp -d) hawkdrop --offline serve --port 8799 &
-HAWKDROP_URL=http://localhost:8799 NODE_PATH=$(npm root -g) node tests/e2e/offline.cjs
-# (set HAWKDROP_TOKEN=... if the server requires one; HAWKDROP_URL may include a sub-path)
+HAWKSENSE_HOME=$(mktemp -d) hawksense --offline serve --port 8799 &
+HAWKSENSE_URL=http://localhost:8799 NODE_PATH=$(npm root -g) node tests/e2e/offline.cjs
+# (set HAWKSENSE_TOKEN=... if the server requires one; HAWKSENSE_URL may include a sub-path)
 
-python scripts/make_icons.py                  # regenerate the app icons
+python scripts/make_icons.py                  # rebuild the app icons from assets/hawksense-logo.webp (needs Pillow)
 ```
 
-When you change files in `hawkdrop/web/`, bump `VERSION` in `sw.js` so installed apps pick
+When you change files in `hawksense/web/`, bump `VERSION` in `sw.js` so installed apps pick
 up the update. They show a "new version ready, Reload" prompt.

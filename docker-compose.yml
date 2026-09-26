@@ -1,39 +1,42 @@
-# Self-hosted HawkDrop.
+# Self-hosted HawkSense.
 #
-#   cp .env.example .env        # set HAWKDROP_TOKEN (and HAWKDROP_DOMAIN for HTTPS)
+#   cp .env.example .env        # set HAWKSENSE_TOKEN (and HAWKSENSE_DOMAIN for HTTPS)
 #   docker compose up -d                     # http://<server>:8765
 #   docker compose --profile https up -d     # + Caddy with automatic HTTPS (needed for iOS offline mode)
 #
-# Data (SQLite) lives in the "hawkdrop-data" volume. Backup:
-#   docker compose exec hawkdrop hawkdrop backup /data/backups
+# Data (SQLite) lives in the "hawksense-data" volume. Backup:
+#   docker compose exec hawksense hawksense backup /data/backups
 
 services:
-  hawkdrop:
+  hawksense:
     build: .
-    image: hawkdrop:latest
+    image: hawksense:latest
     restart: unless-stopped
+    env_file:   # passes notification secrets etc. from .env (HAWKSENSE_TELEGRAM_BOT_TOKEN, ...)
+      - path: .env
+        required: false
     environment:
-      HAWKDROP_TOKEN: ${HAWKDROP_TOKEN:?set HAWKDROP_TOKEN in .env}
-      HAWKDROP_CHECK_EVERY: ${HAWKDROP_CHECK_EVERY:-6}   # hours between automatic price checks
-      HAWKDROP_DEST: ${HAWKDROP_DEST:-IL}                 # IL, US, EU or UK
-      HAWKDROP_BASE_PATH: ${HAWKDROP_BASE_PATH:-}
+      HAWKSENSE_TOKEN: ${HAWKSENSE_TOKEN:?set HAWKSENSE_TOKEN in .env}
+      HAWKSENSE_CHECK_EVERY: ${HAWKSENSE_CHECK_EVERY:-6}   # hours between automatic price checks
+      HAWKSENSE_DEST: ${HAWKSENSE_DEST:-IL}                 # IL, US, EU or UK
+      HAWKSENSE_BASE_PATH: ${HAWKSENSE_BASE_PATH:-}
       TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - hawkdrop-data:/data
-      # optional tax/advisor/store overrides:
+      - hawksense-data:/data
+      # optional overrides: taxes, stores, forwarders, eBay keys, notification channels:
       # - ./config.toml:/data/config.toml:ro
     ports:
-      - "${HAWKDROP_BIND:-0.0.0.0}:${HAWKDROP_PORT:-8765}:8765"
+      - "${HAWKSENSE_BIND:-0.0.0.0}:${HAWKSENSE_PORT:-8765}:8765"
 
   caddy:
     image: caddy:2
     profiles: ["https"]
     restart: unless-stopped
     depends_on:
-      hawkdrop:
+      hawksense:
         condition: service_healthy
     environment:
-      HAWKDROP_DOMAIN: ${HAWKDROP_DOMAIN:-hawkdrop.localhost}
+      HAWKSENSE_DOMAIN: ${HAWKSENSE_DOMAIN:-hawksense.localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -44,6 +47,6 @@ services:
       - caddy-config:/config
 
 volumes:
-  hawkdrop-data:
+  hawksense-data:
   caddy-data:
   caddy-config:

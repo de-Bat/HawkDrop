@@ -3,12 +3,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hawkdrop import tracker as tracker_mod
-from hawkdrop.db import Database
-from hawkdrop.fetch import Extraction
-from hawkdrop.landed import DESTINATIONS
-from hawkdrop.specs import Observation, consensus, extract_specs, parse_dimensions, parse_weight
-from hawkdrop.tracker import Tracker
+from hawksense import tracker as tracker_mod
+from hawksense.db import Database
+from hawksense.fetch import Extraction
+from hawksense.landed import DESTINATIONS
+from hawksense.specs import Observation, consensus, extract_specs, parse_dimensions, parse_weight
+from hawksense.tracker import Tracker
 from tests.test_landed import StubFX
 
 AMAZON = """<table id="productDetails_techSpec_section_1">

@@ -5,11 +5,11 @@ import urllib.parse
 from datetime import date, timedelta
 from pathlib import Path
 
-from hawkdrop.db import Database
-from hawkdrop.landed import DESTINATIONS
-from hawkdrop.notify import Email, Notifier, NotifyError
-from hawkdrop.rules import Change, Report
-from hawkdrop.tracker import CheckResult, Tracker
+from hawksense.db import Database
+from hawksense.landed import DESTINATIONS
+from hawksense.notify import Email, Notifier, NotifyError
+from hawksense.rules import Change, Report
+from hawksense.tracker import CheckResult, Tracker
 from tests.test_landed import StubFX
 
 CFG = {
@@ -83,7 +83,7 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("https://hook.example/x", urls)
         tg = next(c for c in self.http.calls if "telegram" in c[1])
         self.assertEqual(json.loads(tg[3])["chat_id"], "42")
-        self.assertEqual(FakeSMTP.sent[0]["Subject"], "HawkDrop: Buy now: שלום")
+        self.assertEqual(FakeSMTP.sent[0]["Subject"], "HawkSense: Buy now: שלום")
         ntfy = next(c for c in self.http.calls if "ntfy" in c[1])
         ntfy[2]["Title"].encode("latin-1")  # header-safe
         deliveries = self.db.notifications()[0]["deliveries"]
@@ -100,7 +100,7 @@ class NotifyTest(unittest.TestCase):
         self.assertTrue(row["read"])  # not subscribed to the inbox -> history only
 
     def test_twilio_whatsapp_and_env_secrets(self):
-        env = {"HAWKDROP_WHATSAPP_AUTH_TOKEN": "secret"}
+        env = {"HAWKSENSE_WHATSAPP_AUTH_TOKEN": "secret"}
         n = Notifier(self.db, {"whatsapp": {"provider": "twilio", "account_sid": "AC1", "sender": "+1555",
                                             "to": "+97250"}}, http=self.http, env=env)
         self.assertTrue(n.channels["whatsapp"].configured)
@@ -187,7 +187,7 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual(self.events(), ["check_failed"])
 
     def test_sale_soon(self):
-        from hawkdrop.calendar_events import upcoming_events
+        from hawksense.calendar_events import upcoming_events
 
         occ = next(o for o in upcoming_events(date.today(), 400) if o.event.key == "black_friday"
                    and o.start > date.today())

@@ -2,12 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hawkdrop import settings
-from hawkdrop.config import Config
-from hawkdrop.db import Database
-from hawkdrop.notify import Notifier
-from hawkdrop.rules import build
-from hawkdrop.stores import with_overrides, STORES
+from hawksense import settings
+from hawksense.config import Config
+from hawksense.db import Database
+from hawksense.notify import Notifier
+from hawksense.rules import build
+from hawksense.stores import with_overrides, STORES
 
 
 class SettingsTest(unittest.TestCase):
@@ -42,7 +42,7 @@ class SettingsTest(unittest.TestCase):
         token = self.field(view, "notify.telegram.bot_token")
         self.assertEqual((token["value"], token["is_set"], token["source"]), (None, True, "app"))
         self.assertNotIn("123:secret", str(view))
-        env = {"HAWKDROP_TELEGRAM_CHAT_ID": "99"}
+        env = {"HAWKSENSE_TELEGRAM_CHAT_ID": "99"}
         chat = self.field(settings.view(self.db, Config(), env=env), "notify.telegram.chat_id")
         self.assertEqual((chat["value"], chat["locked"], chat["source"]), ("99", True, "environment"))
         with self.assertRaisesRegex(ValueError, "environment"):
@@ -57,7 +57,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_validation(self):
         bad = [{"advisor.max_wait_days": 5000}, {"advisor.min_saving": 0.9}, {"notify.email.to": "nope"},
-               {"notify.app_url": "hawkdrop.local"}, {"destination.code": "XX"}, {"nonsense": 1},
+               {"notify.app_url": "hawksense.local"}, {"destination.code": "XX"}, {"nonsense": 1},
                {"stores.nostore.shipping_flat": 1}, {"stores.amazon_us.bogus": 1},
                {"rules.sources.x": {"url": "https://a", "target": "IL.vat_rate", "regex": "no group"}},
                {"rules.sources.x": {"url": "ftp://a", "target": "IL.vat_rate", "regex": "(\\d+)"}}]

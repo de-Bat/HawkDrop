@@ -3,12 +3,12 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 
-from hawkdrop.currency import FX
-from hawkdrop.db import Database
-from hawkdrop.demo import seed_demo
-from hawkdrop.forecast import advise
-from hawkdrop.landed import DESTINATIONS
-from hawkdrop.tracker import Tracker
+from hawksense.currency import FX
+from hawksense.db import Database
+from hawksense.demo import seed_demo
+from hawksense.forecast import advise
+from hawksense.landed import DESTINATIONS
+from hawksense.tracker import Tracker
 
 ALL_EVENTS = {"black_friday", "singles_day", "rosh_hashana", "passover", "prime_day", "year_end"}
 

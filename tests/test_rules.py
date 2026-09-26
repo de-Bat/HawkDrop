@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hawkdrop import rules
-from hawkdrop.config import Config
-from hawkdrop.db import Database
-from hawkdrop.fetch import FetchError
+from hawksense import rules
+from hawksense.config import Config
+from hawksense.db import Database
+from hawksense.fetch import FetchError
 
 FEED = json.loads((Path(__file__).parent.parent / "rules" / "rules.json").read_text())
 

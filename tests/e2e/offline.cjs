@@ -1,19 +1,19 @@
 // End-to-end check of the web client, including full offline use.
 //
-//   HAWKDROP_URL=http://localhost:8799 node tests/e2e/offline.cjs
+//   HAWKSENSE_URL=http://localhost:8799 node tests/e2e/offline.cjs
 //
-// Needs a running `hawkdrop serve` with an empty database and the Playwright
+// Needs a running `hawksense serve` with an empty database and the Playwright
 // package (NODE_PATH=$(npm root -g) if installed globally).
 const { chromium, devices } = require('playwright');
 const assert = require('assert');
 
-const BASE = (process.env.HAWKDROP_URL || 'http://localhost:8799').replace(/\/$/, '');
-const TOKEN = process.env.HAWKDROP_TOKEN || '';
+const BASE = (process.env.HAWKSENSE_URL || 'http://localhost:8799').replace(/\/$/, '');
+const TOKEN = process.env.HAWKSENSE_TOKEN || '';
 const SHOTS = process.env.SHOTS_DIR;
 
 async function api(method, path, body) {
   const headers = { 'Content-Type': 'application/json' };
-  if (TOKEN) headers['X-HawkDrop-Token'] = TOKEN;
+  if (TOKEN) headers['X-HawkSense-Token'] = TOKEN;
   const res = await fetch(BASE + path, { method, headers, body: body && JSON.stringify(body) });
   return res.json();
 }
@@ -175,7 +175,7 @@ async function api(method, path, body) {
   await page.locator('#bell').click();
   await page.getByText('Test notification').waitFor();
   await shot('10-inbox');
-  await page.waitForFunction(async () => (await (await fetch('api/notifications', { headers: { 'X-HawkDrop-Token': localStorage.getItem('hawkdrop.token') || '' } })).json()).unread === 0, null, { timeout: 15000 });
+  await page.waitForFunction(async () => (await (await fetch('api/notifications', { headers: { 'X-HawkSense-Token': localStorage.getItem('hawkdrop.token') || '' } })).json()).unread === 0, null, { timeout: 15000 });
   step('inbox: notification shown and marked read');
 
   // 13. configure the server from the app: channel secrets (online only), schedule + store policy (offline ok)
@@ -205,7 +205,7 @@ async function api(method, path, body) {
   await page.locator('details.fold', { hasText: 'WhatsApp' }).locator('summary').click();
   await page.locator('input[name="set:notify.whatsapp.apikey"]').fill('k');
   await page.locator('form.settings-form[data-section=whatsapp]').getByRole('button', { name: 'Save' }).click();
-  await page.getByText('Connect to your HawkDrop server to save passwords').waitFor();
+  await page.getByText('Connect to your HawkSense server to save passwords').waitFor();
   await page.locator('#status .pill', { hasText: '2 pending' }).waitFor();
   step('offline: schedule + store shipping queued; secrets refused while offline');
   await context.setOffline(false);

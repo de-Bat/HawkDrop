@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from hawkdrop.cli import main
+from hawksense.cli import main
 
 
 class CliSmokeTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class CliSmokeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = os.path.join(self.tmp.name, "cli.db")
-        os.environ["HAWKDROP_HOME"] = self.tmp.name
+        os.environ["HAWKSENSE_HOME"] = self.tmp.name
 
     def tearDown(self):
         self.tmp.cleanup()

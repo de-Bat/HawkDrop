@@ -1,0 +1,19 @@
+{
+  "name": "HawkSense – smart price tracker",
+  "short_name": "HawkSense",
+  "description": "Delivered prices across Israeli and worldwide stores, and when to buy.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f8",
+  "theme_color": "#052c58",
+  "categories": ["shopping", "finance", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

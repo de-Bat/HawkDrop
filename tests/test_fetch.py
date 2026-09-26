@@ -1,6 +1,6 @@
 import unittest
 
-from hawkdrop.fetch import FetchError, extract_price, parse_number
+from hawksense.fetch import FetchError, extract_price, parse_number
 
 JSON_LD = """<html><head><script type="application/ld+json">
 {"@context":"https://schema.org","@graph":[{"@type":"Product","name":"Headphones",

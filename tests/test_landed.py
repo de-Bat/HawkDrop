@@ -1,8 +1,8 @@
 import unittest
 
-from hawkdrop.currency import FX
-from hawkdrop.landed import DESTINATIONS, destination_from_config, landed_cost
-from hawkdrop.stores import resolve_store
+from hawksense.currency import FX
+from hawksense.landed import DESTINATIONS, destination_from_config, landed_cost
+from hawksense.stores import resolve_store
 
 
 class StubFX(FX):

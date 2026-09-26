@@ -7,8 +7,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from hawkdrop.config import Config
-from hawkdrop.server import ServerContext, make_server
+from hawksense.config import Config
+from hawksense.server import ServerContext, make_server
 
 
 class ServerTest(unittest.TestCase):
@@ -199,8 +199,8 @@ class TokenTest(ServerTest):
 
     def test_token_required_for_api_only(self):
         self.assertEqual(self.call("GET", "/api/snapshot")[0], 401)
-        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "wrong"})[0], 401)
-        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "s3cret"})[0], 200)
+        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkSense-Token": "wrong"})[0], 401)
+        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkSense-Token": "s3cret"})[0], 200)
         self.assertEqual(self.call("GET", "/api/snapshot?token=s3cret")[0], 200)
         self.assertEqual(self.call("GET", "/")[0], 200)
 
@@ -211,19 +211,19 @@ class TokenTest(ServerTest):
 
 
 class BasePathTest(ServerTest):
-    base_path = "/hawkdrop"
+    base_path = "/hawksense"
 
     def test_prefixed_routes(self):
-        self.assertEqual(self.call("GET", "/hawkdrop/api/health")[0], 200)
-        self.assertEqual(self.call("GET", "/hawkdrop/")[0], 200)
-        self.assertEqual(self.call("GET", "/hawkdrop/sw.js")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/api/health")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/")[0], 200)
+        self.assertEqual(self.call("GET", "/hawksense/sw.js")[0], 200)
         self.assertEqual(self.call("GET", "/api/health")[0], 404)
-        req = urllib.request.Request(self.base + "/hawkdrop?token=x")
+        req = urllib.request.Request(self.base + "/hawksense?token=x")
         opener = urllib.request.build_opener(NoRedirect)
         with self.assertRaises(urllib.error.HTTPError) as cm:
             opener.open(req)
         self.assertEqual(cm.exception.code, 308)
-        self.assertEqual(cm.exception.headers["Location"], "/hawkdrop/?token=x")
+        self.assertEqual(cm.exception.headers["Location"], "/hawksense/?token=x")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

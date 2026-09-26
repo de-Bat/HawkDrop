@@ -4,14 +4,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hawkdrop import ebay
-from hawkdrop.db import Database
-from hawkdrop.ebay import (EbayApi, EbayError, EbaySource, listing_id, parse_search_page, search_params,
+from hawksense import ebay
+from hawksense.db import Database
+from hawksense.ebay import (EbayApi, EbayError, EbaySource, listing_id, parse_search_page, search_params,
                            search_url)
-from hawkdrop.fetch import Extraction, FetchError
-from hawkdrop.landed import DESTINATIONS
-from hawkdrop.stores import resolve_store
-from hawkdrop.tracker import Tracker
+from hawksense.fetch import Extraction, FetchError
+from hawksense.landed import DESTINATIONS
+from hawksense.stores import resolve_store
+from hawksense.tracker import Tracker
 from tests.test_landed import StubFX
 
 ITEM = {
@@ -120,7 +120,7 @@ class PageTest(unittest.TestCase):
         self.assertEqual(ex.url, "https://www.ebay.com/itm/222222222222")
 
     def test_listing_page_pattern(self):
-        from hawkdrop.fetch import extract_price
+        from hawksense.fetch import extract_price
         page = ('<div class="x-price-primary" data-testid="x-price-primary">'
                 '<span class="ux-textspans">£249.99</span></div>')
         ex = extract_price(page, "https://www.ebay.co.uk/itm/123456789012")
@@ -135,7 +135,7 @@ class SourceTest(unittest.TestCase):
     def test_credentials_from_env_or_config(self):
         self.assertIsNone(EbaySource({}, env={}).api)
         self.assertIsNotNone(EbaySource({"client_id": "a", "client_secret": "b"}, env={}).api)
-        src = EbaySource({}, env={"HAWKDROP_EBAY_CLIENT_ID": "a", "HAWKDROP_EBAY_CLIENT_SECRET": "b"},
+        src = EbaySource({}, env={"HAWKSENSE_EBAY_CLIENT_ID": "a", "HAWKSENSE_EBAY_CLIENT_SECRET": "b"},
                          dest_code="UK")
         self.assertEqual(src.api.country, "GB")
 

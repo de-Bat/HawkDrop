@@ -2,12 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hawkdrop.db import Database
-from hawkdrop.forwarders import (FORWARDERS, Account, RateCard, Route, forwarders_from_config, parse_dims,
+from hawksense.db import Database
+from hawksense.forwarders import (FORWARDERS, Account, RateCard, Route, forwarders_from_config, parse_dims,
                                  state_from_address)
-from hawkdrop.landed import DESTINATIONS, forwarded_cost
-from hawkdrop.stores import resolve_store
-from hawkdrop.tracker import Tracker
+from hawksense.landed import DESTINATIONS, forwarded_cost
+from hawksense.stores import resolve_store
+from hawksense.tracker import Tracker
 from tests.test_landed import StubFX
 
 IL = DESTINATIONS["IL"]

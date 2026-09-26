@@ -1,0 +1,39 @@
+# systemd unit for a bare-metal / Raspberry Pi install.
+#
+#   sudo python3 -m venv /opt/hawksense && sudo /opt/hawksense/bin/pip install /path/to/HawkSense
+#   sudo cp deploy/hawksense.service /etc/systemd/system/
+#   echo 'HAWKSENSE_TOKEN=...' | sudo tee /etc/hawksense.env && sudo chmod 600 /etc/hawksense.env
+#   sudo systemctl enable --now hawksense
+#
+# Data lives in /var/lib/hawksense. Logs: journalctl -u hawksense -f
+[Unit]
+Description=HawkSense smart price tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=hawksense
+Environment=HAWKSENSE_HOME=/var/lib/hawksense
+Environment=HAWKSENSE_HOST=0.0.0.0
+Environment=HAWKSENSE_PORT=8765
+Environment=HAWKSENSE_CHECK_EVERY=6
+EnvironmentFile=-/etc/hawksense.env
+ExecStart=/opt/hawksense/bin/hawksense serve
+Restart=on-failure
+RestartSec=5
+
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

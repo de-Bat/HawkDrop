@@ -1,7 +1,7 @@
 {
   "version": 1,
   "updated": "2026-09-26",
-  "notes": "HawkDrop rules feed. Installs check this file (weekly by default) and apply changes; changes over 50% wait for the user's review. Keep values in the same units as hawkdrop/landed.py and hawkdrop/forwarders.py. Forwarder rates are estimates - update them from each service's price list.",
+  "notes": "HawkSense rules feed. Installs check this file (weekly by default) and apply changes; changes over 50% wait for the user's review. Keep values in the same units as hawksense/landed.py and hawksense/forwarders.py. Forwarder rates are estimates - update them from each service's price list.",
   "destination": {
     "IL": {
       "name": "Israel",

@@ -1,22 +1,22 @@
-# Caddy obtains and renews a Let's Encrypt certificate for HAWKDROP_DOMAIN automatically.
-{$HAWKDROP_DOMAIN} {
+# Caddy obtains and renews a Let's Encrypt certificate for HAWKSENSE_DOMAIN automatically.
+{$HAWKSENSE_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy hawkdrop:8765
+	reverse_proxy hawksense:8765
 }
 
 # LAN only, no public domain: use Caddy's own CA instead (install its root
 # certificate on the iPhone: Settings > General > About > Certificate Trust Settings).
 #
-# hawkdrop.lan {
+# hawksense.lan {
 # 	tls internal
-# 	reverse_proxy hawkdrop:8765
+# 	reverse_proxy hawksense:8765
 # }
 
 # Serving under a path of an existing site (handle_path strips the prefix):
 #
 # example.com {
-# 	handle_path /hawkdrop/* {
-# 		reverse_proxy hawkdrop:8765
+# 	handle_path /hawksense/* {
+# 		reverse_proxy hawksense:8765
 # 	}
-# 	redir /hawkdrop /hawkdrop/
+# 	redir /hawksense /hawksense/
 # }

@@ -6,21 +6,24 @@ threaded server is safe. Run with ``hawkdrop serve``.
 
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import re
+import signal
+import socket
 import ssl
 import threading
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
-from hawkdrop import api
+from hawkdrop import __version__, api
 from hawkdrop.config import Config
 from hawkdrop.currency import FX
 from hawkdrop.db import Database
@@ -35,6 +38,17 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("text/javascript", ".js")
 
 
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    # the access token can be in the page URL - never leak it to store sites via Referer
+    "Referrer-Policy": "no-referrer",
+}
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
+       "frame-ancestors 'none'; form-action 'self'")
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -46,8 +60,9 @@ class ServerContext:
     db_path: Path
     config: Config
     dest_code: str | None = None
-    offline_fx: bool = False
+    offline_fx: bool | None = None
     token: str | None = None
+    base_path: str = ""  # e.g. "/hawkdrop" when a reverse proxy forwards the prefix unchanged
 
     def tracker(self) -> Tracker:
         db = Database(self.db_path)
@@ -105,7 +120,7 @@ class Api:
     @staticmethod
     @route("GET", r"/api/health")
     def health(t, body, query):
-        return {"ok": True}
+        return {"ok": t.db.healthy(), "version": __version__, "last_check": t.db.get_kv("last_auto_check")}
 
     @staticmethod
     @route("GET", r"/api/meta")
@@ -241,6 +256,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        if content_type.startswith("text/html"):
+            self.send_header("Content-Security-Policy", CSP)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -253,6 +272,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self, method: str):
         url = urlparse(self.path)
+        base = self.ctx.base_path
+        if base:
+            if url.path == base:  # "/hawkdrop" -> "/hawkdrop/" so relative URLs resolve
+                return self._send(308, b"", "text/plain", {"Location": base + "/" + (f"?{url.query}" if url.query else "")})
+            if not url.path.startswith(base + "/"):
+                return self._send(404, b"not found", "text/plain")
+            url = url._replace(path=url.path[len(base):])
         if url.path.startswith("/api/"):
             self._api(method, url)
         elif method == "GET":
@@ -260,16 +286,16 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json(405, {"error": "method not allowed"})
 
-    def _authorized(self, query: dict) -> bool:
+    def _authorized(self, path: str, query: dict) -> bool:
         token = self.ctx.token
-        if not token:
+        if not token or path == "/api/health":  # health stays open for container probes
             return True
-        given = self.headers.get("X-HawkDrop-Token") or query.get("token", [None])[0]
-        return given == token
+        given = self.headers.get("X-HawkDrop-Token") or query.get("token", [""])[0]
+        return hmac.compare_digest(given.encode(), token.encode())
 
     def _api(self, method: str, url):
         query = parse_qs(url.query)
-        if not self._authorized(query):
+        if not self._authorized(url.path, query):
             return self._json(401, {"error": "invalid or missing token"})
         for m, pattern, name in ROUTES:
             match = pattern.match(url.path)
@@ -318,28 +344,57 @@ class Handler(BaseHTTPRequestHandler):
         if target.name == "manifest.webmanifest" and query.get("token"):
             # so an app added to the iOS home screen starts with the access token
             manifest = json.loads(body)
-            manifest["start_url"] = "/?" + urlencode({"token": query["token"][0]})
+            manifest["start_url"] = "./?" + urlencode({"token": query["token"][0]})
             body = json.dumps(manifest, ensure_ascii=False).encode()
         self._send(200, body, ctype, headers)
 
 
+def run_scheduled_check(ctx: ServerContext):
+    t = ctx.tracker()
+    try:
+        items = t.db.list_items()
+        ok = failed = 0
+        for item in items:
+            for r in t.check(item):
+                ok, failed = (ok + 1, failed) if r.error is None else (ok, failed + 1)
+        t.db.set_kv("last_auto_check", datetime.now(timezone.utc).isoformat())
+        log(f"scheduled price check: {len(items)} items, {ok} prices updated, {failed} failed")
+    except Exception:
+        traceback.print_exc()
+    finally:
+        t.db.close()
+
+
+def _next_check_delay(ctx: ServerContext, every: timedelta) -> float:
+    """Seconds until the next check, remembering the last run across restarts."""
+    t = ctx.tracker()
+    try:
+        last = t.db.get_kv("last_auto_check")
+    finally:
+        t.db.close()
+    if not last:
+        return 60.0  # first start: give the server a minute, then check
+    due = datetime.fromisoformat(last) + every
+    return max(30.0, (due - datetime.now(timezone.utc)).total_seconds())
+
+
 def _checker_loop(ctx: ServerContext, every_hours: float, stop: threading.Event):
-    while not stop.wait(every_hours * 3600):
-        t = ctx.tracker()
-        try:
-            for item in t.db.list_items():
-                t.check(item)
-            print(f"[hawkdrop] scheduled price check done at {time.strftime('%H:%M')}")
-        except Exception:
-            traceback.print_exc()
-        finally:
-            t.db.close()
+    every = timedelta(hours=every_hours)
+    while not stop.wait(_next_check_delay(ctx, every)):
+        run_scheduled_check(ctx)
+
+
+def log(message: str):
+    print(f"[hawkdrop {time.strftime('%Y-%m-%d %H:%M:%S')}] {message}", flush=True)
 
 
 def make_server(ctx: ServerContext, host: str = "127.0.0.1", port: int = 8765, certfile: str | None = None,
                 keyfile: str | None = None, quiet: bool = False) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"ctx": ctx, "quiet": quiet})
-    httpd = ThreadingHTTPServer((host, port), handler)
+    server_cls = ThreadingHTTPServer
+    if ":" in host:  # IPv6, e.g. "::" for all interfaces
+        server_cls = type("V6Server", (ThreadingHTTPServer,), {"address_family": socket.AF_INET6})
+    httpd = server_cls((host, port), handler)
     httpd.daemon_threads = True
     if certfile:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -354,18 +409,27 @@ def serve(ctx: ServerContext, host: str, port: int, certfile: str | None = None,
     stop = threading.Event()
     if check_every_hours:
         threading.Thread(target=_checker_loop, args=(ctx, check_every_hours, stop), daemon=True).start()
+
+    def on_term(signum, frame):  # `docker stop` / systemd send SIGTERM
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, on_term)
+
     scheme = "https" if certfile else "http"
-    shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
-    suffix = f"/?token={ctx.token}" if ctx.token else "/"
-    print(f"HawkDrop is running at {scheme}://{shown}:{port}{suffix}")
-    if host in ("0.0.0.0", ""):
-        print("  listening on all interfaces - open it from your phone via this computer's address")
-    if not certfile and host not in ("127.0.0.1", "localhost"):
-        print("  note: iOS only enables offline mode (service worker) over HTTPS - see README")
+    shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "::", "") else host
+    public = host not in ("127.0.0.1", "localhost", "::1")
+    log(f"HawkDrop {__version__} listening on {scheme}://{shown}:{port}{ctx.base_path}/  (db: {ctx.db_path})")
+    if ctx.token:
+        log("access token required - open the app once with ?token=<your token>")
+    elif public:
+        log("WARNING: reachable from the network without an access token - set --token / HAWKDROP_TOKEN")
+    if check_every_hours:
+        log(f"automatic price checks every {check_every_hours:g} h")
+    if public and not certfile:
+        log("note: iOS enables offline mode only over HTTPS - put a TLS proxy in front (see README)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        pass
+        log("shutting down")
     finally:
         stop.set()
         httpd.server_close()

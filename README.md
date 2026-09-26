@@ -78,6 +78,8 @@ hawkdrop serve                                    # http://localhost:8765
 hawkdrop serve --host 0.0.0.0 --token MYSECRET --check-every 6   # reachable from your phone
 ```
 
+To run it permanently on a home server, NAS or VPS, see [Self-hosting](#self-hosting).
+
 The web client lets you see your items, the buy/wait advice with its confidence, a price
 chart with past sales shaded, the delivered-price breakdown for each store, and the sales
 calendar. From it you can log prices, add stores and track new items.
@@ -93,7 +95,7 @@ calendar. From it you can log prices, add stores and track new items.
 
 **Installing on iPhone / iPad:**
 
-1. Run the server where your phone can reach it, **over HTTPS**. iOS only enables service
+1. Run the server where your phone can reach it (see [Self-hosting](#self-hosting)), **over HTTPS**. iOS only enables service
    workers (offline mode) on HTTPS or `localhost`. Some easy ways:
    - [Tailscale](https://tailscale.com/kb/1312/serve): `tailscale serve 8765` gives you
      `https://<machine>.<tailnet>.ts.net`;
@@ -109,6 +111,107 @@ calendar. From it you can log prices, add stores and track new items.
 
 `--check-every HOURS` makes the server fetch every tracked store page on a schedule, so
 prices keep updating while your phone is offline.
+
+## Self-hosting
+
+HawkDrop is a single process with a SQLite file. It needs no external database or
+services and runs well on a Raspberry Pi, a NAS or a small VPS.
+
+### Docker Compose (recommended)
+
+```bash
+git clone https://github.com/de-Bat/HawkDrop && cd HawkDrop
+cp .env.example .env            # set HAWKDROP_TOKEN (openssl rand -hex 24)
+docker compose up -d            # http://<server>:8765/?token=<token>
+```
+
+For the iPhone app you need HTTPS. If you have a domain pointing at the server (ports 80
+and 443 open), set `HAWKDROP_DOMAIN` in `.env` and start the bundled Caddy, which gets and
+renews a Let's Encrypt certificate automatically:
+
+```bash
+docker compose --profile https up -d   # https://<HAWKDROP_DOMAIN>/?token=<token>
+```
+
+Useful commands:
+
+```bash
+docker compose logs -f hawkdrop                          # logs (incl. scheduled checks)
+docker compose exec hawkdrop hawkdrop check              # fetch prices now
+docker compose exec hawkdrop hawkdrop backup /data/backups   # consistent backup, safe while running
+docker compose pull && docker compose up -d --build      # update
+```
+
+The image runs as a non-root user and needs no network access to build, since there are no
+dependencies. It stores everything in the `/data` volume, reports its status through
+Docker's `HEALTHCHECK`, and shuts down cleanly on `docker stop`. Put a `config.toml` in
+`/data` (or mount one) for tax, advisor and store overrides.
+
+Plain Docker works too:
+
+```bash
+docker build -t hawkdrop .
+docker run -d --name hawkdrop -p 8765:8765 -v hawkdrop-data:/data \
+  -e HAWKDROP_TOKEN=change-me -e HAWKDROP_CHECK_EVERY=6 --restart unless-stopped hawkdrop
+```
+
+### HTTPS without a public domain
+
+- **Tailscale** (easiest): install it on the server and your phone, then
+  `tailscale serve --bg 8765` gives `https://<server>.<tailnet>.ts.net` with a real
+  certificate, reachable only from your devices.
+- **Caddy with an internal CA**: use the `tls internal` block in `deploy/Caddyfile`, then
+  install Caddy's root certificate on the iPhone and enable it under Settings → General →
+  About → Certificate Trust Settings.
+- **Cloudflare Tunnel**: point a tunnel at `http://hawkdrop:8765`.
+
+### Behind your own reverse proxy / on a sub-path
+
+The web app uses only relative URLs, so it works at the root of a domain or under a path
+like `https://home.example.com/hawkdrop/`:
+
+- if the proxy **strips** the prefix (Caddy `handle_path`, nginx `location /hawkdrop/ {
+  proxy_pass http://127.0.0.1:8765/; }`), nothing else is needed;
+- if it forwards the path unchanged, set `HAWKDROP_BASE_PATH=/hawkdrop`.
+
+When a proxy is in front, set `HAWKDROP_BIND=127.0.0.1` in `.env` so port 8765 isn't
+exposed directly.
+
+### Without Docker (systemd)
+
+```bash
+sudo python3 -m venv /opt/hawkdrop && sudo /opt/hawkdrop/bin/pip install .
+sudo cp deploy/hawkdrop.service /etc/systemd/system/
+echo "HAWKDROP_TOKEN=$(openssl rand -hex 24)" | sudo tee /etc/hawkdrop.env && sudo chmod 600 /etc/hawkdrop.env
+sudo systemctl enable --now hawkdrop     # data in /var/lib/hawkdrop, logs: journalctl -u hawkdrop
+```
+
+### Server settings
+
+Each setting can be a CLI flag, an environment variable or a `[server]` entry in
+`config.toml`. When the same setting is given more than once, the CLI flag wins over the
+environment variable, which wins over the config file.
+
+| Flag | Environment | Default | |
+|---|---|---|---|
+| `--host` | `HAWKDROP_HOST` | `127.0.0.1` | `0.0.0.0` (or `::`) to listen on the network |
+| `--port` | `HAWKDROP_PORT` | `8765` | |
+| `--token` / `--token-file` | `HAWKDROP_TOKEN` / `HAWKDROP_TOKEN_FILE` | none | access token (file: e.g. Docker secret) |
+| `--check-every` | `HAWKDROP_CHECK_EVERY` | off | hours between automatic price checks; the schedule survives restarts |
+| `--cert` / `--key` | `HAWKDROP_CERT` / `HAWKDROP_KEY` | none | serve HTTPS directly |
+| `--base-path` | `HAWKDROP_BASE_PATH` | none | URL prefix if the proxy doesn't strip it |
+| `--db` | `HAWKDROP_DB` | `$HAWKDROP_HOME/hawkdrop.db` | |
+| `--dest` | `HAWKDROP_DEST` | `IL` | destination country for taxes |
+| | `HAWKDROP_HOME` | `~/.hawkdrop` | data + `config.toml` directory |
+| | `HAWKDROP_CONFIG` | `$HAWKDROP_HOME/config.toml` | |
+
+Security notes:
+
+- `/api/health` is the only endpoint that works without the token.
+- Tokens are compared in constant time.
+- Pages are sent with a strict Content-Security-Policy and `Referrer-Policy: no-referrer`,
+  so the token in the app URL never leaks to store sites.
+- The server logs a warning if it is reachable from the network without a token.
 
 ## How the advice works
 
@@ -171,6 +274,7 @@ python -m unittest discover -s tests          # unit + API tests
 # browser test of the web app, including full offline use (needs Playwright + Chromium)
 HAWKDROP_HOME=$(mktemp -d) hawkdrop --offline serve --port 8799 &
 HAWKDROP_URL=http://localhost:8799 NODE_PATH=$(npm root -g) node tests/e2e/offline.cjs
+# (set HAWKDROP_TOKEN=... if the server requires one; HAWKDROP_URL may include a sub-path)
 
 python scripts/make_icons.py                  # regenerate the app icons
 ```

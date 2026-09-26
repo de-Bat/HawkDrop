@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS prices (
     client_id TEXT
 );
 CREATE INDEX IF NOT EXISTS prices_offer_ts ON prices (offer_id, ts);
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS fx (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     rates TEXT NOT NULL,
@@ -90,6 +94,11 @@ class Database:
         self.conn = sqlite3.connect(self.path, timeout=15)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets the web server, the scheduled checker and CLI commands (e.g. `docker exec
+        # hawkdrop hawkdrop check`) read and write concurrently without "database is locked"
+        if str(self.path) != ":memory:":
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.executescript(SCHEMA)
         self._migrate()
 
@@ -104,6 +113,21 @@ class Database:
 
     def close(self):
         self.conn.close()
+
+    def backup(self, target: str | Path):
+        """Consistent snapshot of the database, safe while other processes are writing."""
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        dst = sqlite3.connect(tmp)
+        try:
+            self.conn.backup(dst)
+        finally:
+            dst.close()
+        tmp.replace(target)
+
+    def healthy(self) -> bool:
+        return self.conn.execute("SELECT 1").fetchone()[0] == 1
 
     # ---- items -------------------------------------------------------------
     def add_item(self, name: str, category: str = "default", target_price: float | None = None) -> Item:
@@ -200,6 +224,16 @@ class Database:
                        bool(r["in_stock"]), r["source"])
             for r in rows
         ]
+
+    # ---- small settings store -------------------------------------------------
+    def get_kv(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_kv(self, key: str, value: str):
+        with self.conn:
+            self.conn.execute("INSERT INTO kv (key, value) VALUES (?, ?)"
+                              " ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---- fx ------------------------------------------------------------------
     def get_fx(self) -> tuple[dict[str, float], datetime] | None:

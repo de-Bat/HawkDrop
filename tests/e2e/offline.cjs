@@ -7,11 +7,14 @@
 const { chromium, devices } = require('playwright');
 const assert = require('assert');
 
-const BASE = process.env.HAWKDROP_URL || 'http://localhost:8799';
+const BASE = (process.env.HAWKDROP_URL || 'http://localhost:8799').replace(/\/$/, '');
+const TOKEN = process.env.HAWKDROP_TOKEN || '';
 const SHOTS = process.env.SHOTS_DIR;
 
 async function api(method, path, body) {
-  const res = await fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  const headers = { 'Content-Type': 'application/json' };
+  if (TOKEN) headers['X-HawkDrop-Token'] = TOKEN;
+  const res = await fetch(BASE + path, { method, headers, body: body && JSON.stringify(body) });
   return res.json();
 }
 
@@ -26,7 +29,7 @@ async function api(method, path, body) {
   const step = (msg) => console.log(`• ${msg}`);
 
   // 1. first visit online: empty state, then demo data
-  await page.goto(BASE + '/');
+  await page.goto(BASE + '/' + (TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''));
   await page.getByText('Track your first item').waitFor();
   await shot('01-empty');
   await page.getByRole('button', { name: 'Load demo' }).click();

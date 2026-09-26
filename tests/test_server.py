@@ -13,10 +13,12 @@ from hawkdrop.server import ServerContext, make_server
 
 class ServerTest(unittest.TestCase):
     token = None
+    base_path = ""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        ctx = ServerContext(Path(self.tmp.name) / "s.db", Config(), offline_fx=True, token=self.token)
+        ctx = ServerContext(Path(self.tmp.name) / "s.db", Config(), offline_fx=True, token=self.token,
+                            base_path=self.base_path)
         self.httpd = make_server(ctx, "127.0.0.1", 0, quiet=True)
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -95,7 +97,14 @@ class ApiTest(ServerTest):
 
     def test_manifest_carries_token(self):
         req = urllib.request.urlopen(self.base + "/manifest.webmanifest?token=s3cret")
-        self.assertEqual(json.loads(req.read())["start_url"], "/?token=s3cret")
+        self.assertEqual(json.loads(req.read())["start_url"], "./?token=s3cret")
+
+
+    def test_security_headers(self):
+        res = urllib.request.urlopen(self.base + "/")
+        self.assertEqual(res.headers["Referrer-Policy"], "no-referrer")
+        self.assertIn("script-src 'self'", res.headers["Content-Security-Policy"])
+        self.assertEqual(res.headers["X-Content-Type-Options"], "nosniff")
 
 
 class TokenTest(ServerTest):
@@ -103,8 +112,36 @@ class TokenTest(ServerTest):
 
     def test_token_required_for_api_only(self):
         self.assertEqual(self.call("GET", "/api/snapshot")[0], 401)
+        self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "wrong"})[0], 401)
         self.assertEqual(self.call("GET", "/api/snapshot", headers={"X-HawkDrop-Token": "s3cret"})[0], 200)
+        self.assertEqual(self.call("GET", "/api/snapshot?token=s3cret")[0], 200)
         self.assertEqual(self.call("GET", "/")[0], 200)
+
+    def test_health_is_public(self):
+        status, body = self.call("GET", "/api/health")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+
+class BasePathTest(ServerTest):
+    base_path = "/hawkdrop"
+
+    def test_prefixed_routes(self):
+        self.assertEqual(self.call("GET", "/hawkdrop/api/health")[0], 200)
+        self.assertEqual(self.call("GET", "/hawkdrop/")[0], 200)
+        self.assertEqual(self.call("GET", "/hawkdrop/sw.js")[0], 200)
+        self.assertEqual(self.call("GET", "/api/health")[0], 404)
+        req = urllib.request.Request(self.base + "/hawkdrop?token=x")
+        opener = urllib.request.build_opener(NoRedirect)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            opener.open(req)
+        self.assertEqual(cm.exception.code, 308)
+        self.assertEqual(cm.exception.headers["Location"], "/hawkdrop/?token=x")
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
 
 
 if __name__ == "__main__":

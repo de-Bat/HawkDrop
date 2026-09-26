@@ -117,12 +117,12 @@ const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '
 
 function requestFor(op) {
   switch (op.type) {
-    case 'create_item': return ['POST', '/api/items', op.body];
-    case 'update_item': return ['PATCH', `/api/items/${op.itemId}`, op.body];
-    case 'delete_item': return ['DELETE', `/api/items/${op.itemId}`];
-    case 'add_offer': return ['POST', `/api/items/${op.itemId}/offers`, op.body];
-    case 'remove_offer': return ['DELETE', `/api/items/${op.itemId}/offers/${op.offerId}`];
-    case 'add_price': return ['POST', `/api/items/${op.itemId}/prices`, { ...op.body, client_id: op.clientId }];
+    case 'create_item': return ['POST', 'api/items', op.body];
+    case 'update_item': return ['PATCH', `api/items/${op.itemId}`, op.body];
+    case 'delete_item': return ['DELETE', `api/items/${op.itemId}`];
+    case 'add_offer': return ['POST', `api/items/${op.itemId}/offers`, op.body];
+    case 'remove_offer': return ['DELETE', `api/items/${op.itemId}/offers/${op.offerId}`];
+    case 'add_price': return ['POST', `api/items/${op.itemId}/prices`, { ...op.body, client_id: op.clientId }];
     default: throw new Error(`unknown change ${op.type}`);
   }
 }
@@ -256,7 +256,7 @@ export function sync() {
         await outboxDelete(op.seq);
         state.outbox.shift();
       }
-      const snap = await api('GET', '/api/snapshot', undefined, { timeout: 60000 });
+      const snap = await api('GET', 'api/snapshot', undefined, { timeout: 60000 });
       state.base = snap;
       state.lastSync = Date.now();
       state.lastError = null;

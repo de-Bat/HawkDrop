@@ -2,7 +2,9 @@
 // Data is stored by the app itself in IndexedDB (see store.js), so API calls
 // always go to the network and the app decides what to do when they fail.
 
-const VERSION = 'hawkdrop-v2';
+const VERSION = 'hawkdrop-v3';
+// works under any prefix (e.g. https://home.example.com/hawkdrop/)
+const API_PREFIX = new URL('api/', self.registration.scope).pathname;
 const SHELL = [
   './',
   './index.html',
@@ -16,6 +18,7 @@ const SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
+  './boot.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -47,7 +50,7 @@ async function clean(response) {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith(API_PREFIX)) return;
 
   if (req.mode === 'navigate') {
     // app shell: answer from cache instantly (works offline), refresh in the background

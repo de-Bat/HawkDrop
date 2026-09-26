@@ -503,7 +503,7 @@ function editItemSheet(it) {
 async function checkPrices(it) {
   toast('Checking store pages…', { timeout: 2500 });
   try {
-    const res = await online('POST', `/api/items/${it.id}/check`);
+    const res = await online('POST', `api/items/${it.id}/check`);
     const ok = res.results.filter((r) => r.ok).length;
     const bad = res.results.filter((r) => !r.ok);
     toast(`${ok} price${ok === 1 ? '' : 's'} updated${bad.length ? `, ${bad.length} failed (${bad.map((b) => b.store).join(', ')}). Log those by hand.` : ''}`, { timeout: 7000 });
@@ -527,7 +527,7 @@ async function onClick(ev) {
       if (it && confirm('Stop tracking this store for this item?')) await mutate({ type: 'remove_offer', itemId: it.id, offerId: Number(el.dataset.offer) });
       break;
     case 'demo':
-      try { const item = await online('POST', '/api/demo'); location.hash = `#/item/${item.id}`; } catch (e) { toast(`Demo needs the server: ${e.message}`); }
+      try { const item = await online('POST', 'api/demo'); location.hash = `#/item/${item.id}`; } catch (e) { toast(`Demo needs the server: ${e.message}`); }
       break;
     case 'event-filter': eventFilter = el.dataset.filter; render({ force: true }); break;
     case 'dismiss-hint': try { localStorage.setItem('hawkdrop.installHint', 'no'); } catch { /* ignore */ } render({ force: true }); break;

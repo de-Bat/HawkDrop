@@ -17,13 +17,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
   <link rel="manifest" href="manifest.webmanifest" id="manifest-link">
   <link rel="stylesheet" href="styles.css">
-  <script>
-    // carry an access token into the manifest so "Add to Home Screen" keeps it
-    (function () {
-      var t = new URLSearchParams(location.search).get('token');
-      if (t) document.getElementById('manifest-link').href = 'manifest.webmanifest?token=' + encodeURIComponent(t);
-    })();
-  </script>
+  <script src="boot.js"></script>
 </head>
 <body>
   <header class="topbar">

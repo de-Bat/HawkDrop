@@ -64,6 +64,24 @@ def obs(source, w=None, d=None, wk="package", dk="package"):
     return Observation(source, f"https://{source}", w, d, wk, dk)
 
 
+class LiveLayoutTest(unittest.TestCase):
+    """Layouts seen on the stores' real pages."""
+
+    def test_ivory_spec_rows(self):
+        page = ('<li class="col-md-12 col-12"><div style="width:40%"><b>מידות כ-</b></div>'
+                '<div dir="rtl">מידות מוצר 175.2x54.8x62 מ"מ (ללא בסיס)<br>מידות בסיס 95x95x8.5 מ"מ<br>'
+                'משקל 225 גרם</div></li>')
+        specs = extract_specs(page)
+        self.assertEqual((specs.weight_kg, specs.dims_cm), (0.225, (17.5, 5.5, 6.2)))
+
+    def test_newegg_shipping_box(self):
+        page = ('<script>window.__initialState__ = {"AllSellerList":[{"Item":"19-113-844","UnitCost":279,'
+                '"Weight":0.2,"Length":4.9,"Width":4.9,"Height":1.4,"ShippingCharge":0.01}]}</script>')
+        specs = extract_specs(page)
+        self.assertEqual((specs.weight_kg, specs.weight_kind), (0.091, "package"))
+        self.assertEqual(specs.dims_cm, (12.4, 12.4, 3.6))
+
+
 class ConsensusTest(unittest.TestCase):
     def test_verified_when_sources_agree(self):
         c = consensus([obs("a", 1.0, (30, 20, 10)), obs("b", 1.1, (30, 21, 10))])
@@ -74,11 +92,36 @@ class ConsensusTest(unittest.TestCase):
     def test_single_source_is_unverified(self):
         self.assertEqual(consensus([obs("a", 1.0)]).status, "unverified")
 
-    def test_conflict_uses_larger_value_and_alerts(self):
-        c = consensus([obs("a", 1.0), obs("b", 2.5)])
-        self.assertEqual((c.status, c.weight_kg), ("conflict", 2.5))
+    def test_even_split_uses_nothing_and_alerts(self):
+        c = consensus([obs("A", 1.0), obs("B", 2.5), obs("C")])
+        self.assertEqual((c.status, c.weight_kg), ("conflict", None))
         self.assertTrue(c.alert)
-        self.assertIn("disagree", c.messages[0])
+        self.assertEqual(c.messages[0], "No weight is used: the store pages split evenly - A (1 kg boxed) vs "
+                                        "B (2.5 kg boxed); C doesn't list a weight. Please set it yourself.")
+
+    def test_bigger_group_wins_and_is_flagged(self):
+        c = consensus([obs("Amazon", 1.0, (30, 20, 10)), obs("B&H", 1.05, (30, 21, 10)),
+                       obs("KSP", 2.5, (50, 40, 30)), obs("Bug")])
+        self.assertEqual((c.status, c.weight_kg, c.dims_cm), ("majority", 1.025, (30, 20, 10)))
+        self.assertFalse(c.alert)
+        self.assertEqual(c.to_confirm(), [
+            "Weight 1.025 kg: Amazon (1 kg boxed) and B&H (1.05 kg boxed) agree, but KSP (2.5 kg boxed) differs; "
+            "Bug doesn't list a weight.",
+            "Size 30x20x10 cm: Amazon (30x20x10 cm boxed) and B&H (30x21x10 cm boxed) agree, but "
+            "KSP (50x40x30 cm boxed) differs; Bug doesn't list a size."])
+        self.assertEqual(len(c.to_confirm(weight_manual=True)), 1)  # what you set yourself isn't asked
+
+    def test_agreement_with_pages_that_list_nothing_is_flagged(self):
+        c = consensus([obs("Amazon", 1.0), obs("B&H", 1.1), obs("KSP")])
+        self.assertEqual(c.status, "verified")
+        self.assertEqual(c.confirm["weight"], "Weight 1.05 kg: Amazon (1 kg boxed) and B&H (1.1 kg boxed) agree; "
+                                              "KSP doesn't list a weight.")
+        self.assertEqual(consensus([obs("Amazon", 1.0), obs("B&H", 1.1)]).confirm, {})  # all pages agree
+
+    def test_even_split_on_size_alerts(self):
+        c = consensus([obs("A", 1.0, (10, 10, 10)), obs("B", 1.0, (40, 40, 40))])
+        self.assertEqual((c.status, c.weight_kg, c.dims_cm), ("conflict", 1.0, None))
+        self.assertTrue(c.alert)
 
     def test_item_weight_gets_packaging_allowance(self):
         c = consensus([obs("a", 1.0, wk="item"), obs("b", 1.0, wk="item")])
@@ -130,6 +173,31 @@ class TrackerSpecsTest(unittest.TestCase):
         item = self.db.get_item(self.item.id)
         self.assertEqual((item.weight_kg, item.weight_source), (3.0, "manual"))
         self.assertEqual(item.dims, "26x22x9")  # size wasn't set by hand, so it's learned
+
+    def test_split_pages_put_forwarder_prices_on_hold(self):
+        self.db.update_item(self.item, weight_kg=0.25, source="auto")
+        self.db.set_specs_status(self.item, "conflict")  # e.g. the pages split evenly
+        self.db.save_spec_observation(self.item, "Amazon", "https://www.amazon.com/dp/X", 0.25, None)
+        self.db.save_spec_observation(self.item, "KSP", "https://ksp.co.il/web/item/1", 2.5, None)
+        self.t.update_specs(self.item)
+        item = self.db.get_item(self.item.id)
+        self.assertIsNone(item.weight_kg)  # the old automatic value no longer stands
+        self.assertIn("on hold", self.t.specs_hold(item))
+        offer = self.db.offers(item)[0]
+        self.t.record_price(item, offer.url, 100.0, "USD")
+        [q] = [q for q in self.t.quotes(item, explore=True) if q.store.key == "amazon_us"]
+        self.assertTrue(all(r.hold for r in q.routes if r.route != "direct"))
+        self.assertEqual(q.landed.route, "direct")  # buying directly doesn't depend on the weight
+        self.t.confirm_specs(item)  # nothing to confirm yet: still no weight
+        self.db.update_item(item, weight_kg=0.4)  # you set it
+        self.assertIsNone(self.t.specs_hold(self.db.get_item(item.id)))
+
+    def test_confirm_keeps_the_values(self):
+        with self.fake_fetch({"amazon": AMAZON, "ksp": KSP}):
+            self.t.check(self.item)
+        item = self.t.confirm_specs(self.item)
+        self.assertEqual((item.weight_source, item.dims_source), ("manual", "manual"))
+        self.assertAlmostEqual(item.weight_kg, 0.25)
 
     def test_nothing_found_is_reported(self):
         with self.fake_fetch({"amazon": "<p>no specs</p>", "ksp": "<p>none</p>"}):

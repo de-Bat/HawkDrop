@@ -77,7 +77,7 @@ def landed(lc: LandedCost) -> dict:
     return {"item": _r(lc.item), "shipping": _r(lc.shipping), "duty": _r(lc.duty), "vat": _r(lc.vat),
             "fees": _r(lc.fees), "sales_tax": _r(lc.sales_tax), "total": _r(lc.total),
             "shipping_known": lc.shipping_known, "domestic": lc.domestic, "notes": lc.notes,
-            "route": lc.route, "route_label": lc.route_label, "set_up": lc.set_up,
+            "route": lc.route, "route_label": lc.route_label, "set_up": lc.set_up, "hold": lc.hold,
             "lines": [[label, _r(v)] for label, v in lc.lines]}
 
 
@@ -117,6 +117,8 @@ def specs(t: Tracker, item: Item) -> dict:
     found, rows = t.specs(item)
     return {"status": found.status if rows else None, "messages": found.messages if rows else [],
             "alert": bool(rows) and found.alert and item.weight_source != "manual",
+            "confirm": found.to_confirm(item.weight_source == "manual", item.dims_source == "manual")
+            if rows and not found.alert else [],
             "weight_kg": found.weight_kg, "dims": found.dims_text,
             "weight_source": item.weight_source, "dims_source": item.dims_source,
             "observations": [{"source": r["source"], "url": r["url"], "weight_kg": r["weight_kg"], "dims": r["dims"],

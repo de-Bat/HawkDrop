@@ -96,7 +96,9 @@ def guess_currency(text: str) -> str | None:
 
 # Pages come from anywhere, so parsing must stay linear in the page size: no ".*?" scans from
 # every opening tag (a hostile page with thousands of unclosed tags would take hours).
-_LD_OPEN = re.compile(r'<script\b[^>]{0,300}?type=["\']application/ld\+json["\'][^>]{0,300}>', re.I)
+# the "+" is sometimes written as an entity: type="application/ld&#x2B;json" (Zap)
+_LD_OPEN = re.compile(r'<script\b[^>]{0,300}?type=["\']application/ld(?:\+|&#x2b;|&#43;|&plus;)json["\'][^>]{0,300}>',
+                      re.I)
 
 
 def ld_json_blocks(page: str):
@@ -205,6 +207,10 @@ _STORE_PATTERNS = {
         ('id="corePrice', r'<span class="a-offscreen">([^<]{1,40})</span>'),
         ('<span class="a-price', r'^[^"]{0,200}"[^>]{0,300}><span class="a-offscreen">([^<]{1,40})</span>'),
     ],
+    "newegg.": [  # $<strong>220</strong><sup>.00</sup>; the first one is the item's buy box
+        ('class="price-current',
+         r'^[^>]{0,100}>(?:\s*<span[^>]{0,100}></span>)?\s*([$]?)\s*<strong>([\d,]{1,12})</strong>\s*<sup>(\.\d{1,2})?</sup>'),
+    ],
     "ebay.": [
         ('<div class="x-price-primary"', r'<span class="ux-textspans">([^<]{1,40})</span>'),
         ('itemprop="price"', r'^[^>]{0,300}>([^<]{1,40})</span>'),
@@ -223,10 +229,20 @@ def extract_store_specific(page: str, url: str) -> Extraction | None:
             while i >= 0 and tries < 20:  # the first few occurrences are enough
                 start = i + len(marker)
                 m = re.search(pattern, page[start:start + STORE_WINDOW], re.S)
-                if m and (value := parse_number(m.group(1))):
-                    return Extraction(value, guess_currency(m.group(1)), method=f"{key.rstrip('.')}-pattern")
+                text = "".join(g for g in m.groups() if g) if m else ""  # "$" + "220" + ".00"
+                if m and (value := parse_number(text)):
+                    return Extraction(value, guess_currency(text), method=f"{key.rstrip('.')}-pattern")
                 i, tries = page.find(marker, start), tries + 1
     return None
+
+
+_BLOCK_WORDS = r"captcha|robot check|access denied|just a moment|attention required|pardon our interruption"
+_BLOCK_TITLE = re.compile(r"<title[^>]{0,100}>[^<]{0,200}?(?:" + _BLOCK_WORDS + ")", re.I)
+
+
+def _blocked(page: str) -> bool:
+    """A bot-check page, not a product page that merely loads a captcha script for its forms."""
+    return bool(_BLOCK_TITLE.search(page) or (len(page) < 20_000 and re.search(_BLOCK_WORDS, page, re.I)))
 
 
 def extract_price(page: str, url: str = "", price_regex: str | None = None) -> Extraction:
@@ -241,7 +257,7 @@ def extract_price(page: str, url: str = "", price_regex: str | None = None) -> E
     result = extract_store_specific(page, url)
     if result:
         return result
-    if re.search(r"captcha|robot check|access denied", page, re.I):
+    if _blocked(page):
         raise FetchError("the store blocked the request (captcha) - record the price manually with `hawksense price`")
     raise FetchError("no price found on the page - add --regex to the offer or record the price manually")
 

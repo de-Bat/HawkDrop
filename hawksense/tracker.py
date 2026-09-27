@@ -205,12 +205,33 @@ class Tracker:
         """Adopt the store pages' consensus unless you set the weight/size yourself."""
         found, _ = self.specs(item)
         item = self.db.get_item(item.id)
-        if found.weight_kg and item.weight_source != "manual":
-            self.db.update_item(item, weight_kg=found.weight_kg, source="auto")
-        if found.dims_cm and item.dims_source != "manual":
-            self.db.update_item(item, dims=found.dims_text, source="auto")
+        if item.weight_source != "manual":
+            if found.weight_kg:
+                self.db.update_item(item, weight_kg=found.weight_kg, source="auto")
+            elif item.weight_source == "auto":  # the pages no longer support it
+                self.db.clear_item_field(item, "weight_kg")
+        if item.dims_source != "manual":
+            if found.dims_cm:
+                self.db.update_item(item, dims=found.dims_text, source="auto")
+            elif item.dims_source == "auto":
+                self.db.clear_item_field(item, "dims")
         self.db.set_specs_status(item, found.status)
         return found
+
+    def specs_hold(self, item: Item) -> str | None:
+        """Why forwarder prices for this item wait for you: its weight/size is unknown or the pages split."""
+        if item.weight_source == "manual" or item.specs_status not in ("missing", "conflict"):
+            return None
+        what = "weight not found on any store page" if item.specs_status == "missing" \
+            else "store pages disagree on the weight/size"
+        return (f"{what} - forwarder prices are on hold until you set it "
+                f"(hawksense track {item.name!r} --weight KG --dims LxWxH)")
+
+    def confirm_specs(self, item: Item) -> Item:
+        """You checked the weight/size in use: keep them as if you had set them yourself."""
+        item = self.db.get_item(item.id)
+        self.db.update_item(item, weight_kg=item.weight_kg, dims=item.dims, source="manual")
+        return self.db.get_item(item.id)
 
     def fetch_specs(self, item: Item, url: str) -> Consensus:
         """Read weight/size from an extra page (e.g. the manufacturer's) to cross-check the stores."""
@@ -257,10 +278,13 @@ class Tracker:
                 direct.shipping_known = False
                 direct.notes.append(f"{store.name} doesn't ship to {self.dest.name} - set up a forwarder "
                                     "(`hawksense forwarder add`)")
+        if hold := self.specs_hold(item):
+            for o in options:  # no guessed weight: these wait until you set it
+                o.hold, o.shipping_known = hold, False
         if direct is not None:
             options.append(direct)
-        # suggestions never win; a route with a known shipping cost beats a guessed one
-        return sorted(options, key=lambda lc: (not lc.set_up, not lc.shipping_known, lc.total))
+        # routes on hold and suggestions never win; a known shipping cost beats a guessed one
+        return sorted(options, key=lambda lc: (lc.hold is not None, not lc.set_up, not lc.shipping_known, lc.total))
 
     def landed(self, item: Item, offer: Offer, point: PricePoint, store: StoreProfile | None = None) -> LandedCost:
         return self.landed_options(item, offer, point, store)[0]
@@ -275,7 +299,7 @@ class Tracker:
             store = self.store_for(offer)
             routes = self.landed_options(item, offer, points[-1], store, explore)
             out.append(Quote(offer, store, points[-1], routes[0], routes))
-        return sorted(out, key=lambda q: (not q.point.in_stock, q.landed.total))
+        return sorted(out, key=lambda q: (q.landed.hold is not None, not q.point.in_stock, q.landed.total))
 
     def daily_series(self, item: Item, today: date | None = None) -> list[tuple[date, float]]:
         """Cheapest in-stock landed price per day, carrying each store's last price forward."""
@@ -285,7 +309,8 @@ class Tracker:
             store = self.store_for(offer)
             pts = []
             for p in self.db.prices(offer):
-                total = self.landed(item, offer, p, store).total if p.in_stock else None
+                lc = self.landed(item, offer, p, store) if p.in_stock else None
+                total = lc.total if lc and lc.hold is None else None
                 pts.append((p.ts.date(), total))
             if pts:
                 per_offer.append(pts)
@@ -317,4 +342,8 @@ class Tracker:
             event_keys = {e for q in quotes for e in q.store.events}
         advice = advise(self.daily_series(item, today), item.category, event_keys, today, self.settings,
                         item.target_price, n_offers=len(quotes), currency=self.dest.currency)
+        if quotes and (hold := self.specs_hold(item)):
+            if all(q.landed.hold for q in quotes):  # nothing can be priced until you set the weight
+                advice.action, advice.confidence = "NO_DATA", 0.0
+            advice.reasons.insert(0, hold[0].upper() + hold[1:])
         return advice, quotes

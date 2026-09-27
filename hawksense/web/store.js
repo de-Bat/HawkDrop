@@ -183,6 +183,11 @@ function applyOp(snap, op) {
         for (const k of ['target_price', 'weight_kg', 'dims']) if (k in b) item[k] = b[k] === '' ? null : b[k];
         if ('muted' in b) item.muted = b.muted;
         if ('weight_kg' in b && item.specs) item.specs.weight_source = b.weight_kg === '' ? null : 'manual';
+        if ('dims' in b && item.specs) item.specs.dims_source = b.dims === '' ? null : 'manual';
+        if (item.specs && item.specs.weight_source === 'manual') {  // set or confirmed: nothing left to ask
+          item.specs.alert = false;
+          item.specs.confirm = [];
+        }
         item.pending = true;
       }
       break;

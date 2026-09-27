@@ -7,12 +7,17 @@ an item's size from the store pages it already checks:
    ``additionalProperty`` entries,
 2. spec tables and lists ("Item Weight", "Package Dimensions", "משקל", "מידות" ...).
 
-Every page is one observation. ``consensus`` compares them: two or more sources
-that agree (within 15%) make a *verified* value; a single source is
-*unverified*; sources that disagree are a *conflict* (the larger value is used,
-so shipping isn't underestimated) and nothing found is *missing*. Conflicts and
-missing values are reported to the user. A weight or size the user set by hand
-always wins.
+Every page is one observation. ``consensus`` groups the pages whose values agree
+(weights within 15%, box volumes within 30%):
+
+- one group: its value is used - *verified* with two or more pages, *unverified* with one;
+- one group bigger than the rest (*majority*): its value is used;
+- the biggest groups tie (*conflict*) or nothing was found (*missing*): no value is used,
+  the user is alerted, and forwarder prices wait until they set it.
+
+A value that is used while other pages disagree or don't list it is flagged for the
+user to confirm, with what each page said. A weight or size the user set (or
+confirmed) always wins.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import statistics
 from dataclasses import dataclass, field
 
 AGREE = 0.15  # relative spread for sources to count as agreeing
-CONFLICT = 0.30  # relative spread above which sources disagree
+CONFLICT = 0.30  # box volumes this close still agree (small differences on three sides add up)
 
 _WEIGHT_UNITS = {
     "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0, "ק\"ג": 1.0, "קג": 1.0, "קילו": 1.0,
@@ -145,6 +150,7 @@ def _side_cm(node) -> float:
 def _apply_label(specs: Specs, label: str, value: str) -> None:
     hint = re.search(r"\(([^)]*)\)", label)  # "Weight (kg)": 1.2
     label = re.sub(r"\s+", " ", re.sub(r"\([^)]*\)|[:\u200e\u200f]", " ", label)).strip().lower()
+    label = re.sub(r"\s+(?:כ-?|בערך|approx\.?|approximately)$", "", label)  # "מידות כ-" (approx.)
     if hint and not re.search(r"[a-z\u0590-\u05ff\"]", value, re.I):
         value = f"{value} {hint.group(1)}"
     for pattern, kind in _DIMS_LABELS:
@@ -245,12 +251,30 @@ def specs_from_pairs(pairs: list[tuple[str, str]], method: str = "attributes") -
     return specs
 
 
+# Newegg's page data: the item's shipping box, in pounds and inches (the item comes first)
+_NEWEGG_BOX = re.compile(r'"Weight":(\d{1,4}(?:\.\d+)?),"Length":(\d{1,4}(?:\.\d+)?),"Width":(\d{1,4}(?:\.\d+)?),'
+                         r'"Height":(\d{1,4}(?:\.\d+)?),"ShippingCharge"')
+
+
+def _from_store_data(page: str) -> Specs:
+    specs = Specs(method="store-data")
+    if m := _NEWEGG_BOX.search(page):
+        weight = parse_weight(f"{m.group(1)} lb")
+        dims = parse_dimensions(f"{m.group(2)} x {m.group(3)} x {m.group(4)} in")
+        if weight:
+            specs.weight_kg, specs.weight_kind = weight, "package"
+        if dims:
+            specs.dims_cm, specs.dims_kind = dims, "package"
+    return specs
+
+
 def extract_specs(page: str) -> Specs:
     """Weight and size found on a product page (empty ``Specs`` if none)."""
     ld = _from_json_ld(page)
     table = _from_tables(page)
-    out = Specs(method="+".join(m for m, s in (("json-ld", ld), ("spec-table", table)) if s))
-    for src in (ld, table):  # structured data first; package values beat item values
+    store = _from_store_data(page)
+    out = Specs(method="+".join(m for m, s in (("json-ld", ld), ("spec-table", table), ("store-data", store)) if s))
+    for src in (ld, table, store):  # structured data first; package values beat item values
         if src.weight_kg is not None and (out.weight_kg is None or
                                           (src.weight_kind == "package" and out.weight_kind != "package")):
             out.weight_kg, out.weight_kind = src.weight_kg, src.weight_kind
@@ -280,6 +304,8 @@ class Consensus:
     weight_status: str = "missing"
     dims_status: str = "missing"
     messages: list[str] = field(default_factory=list)
+    # values that are used although some pages don't list them: {"weight"|"dims": what to confirm, and why}
+    confirm: dict[str, str] = field(default_factory=dict)
 
     @property
     def dims_text(self) -> str | None:
@@ -287,22 +313,28 @@ class Consensus:
 
     @property
     def alert(self) -> bool:
+        """Nothing usable, or the pages split evenly: no value is used and forwarder prices wait for you."""
         return self.status in ("conflict", "missing")
+
+    def to_confirm(self, weight_manual: bool = False, dims_manual: bool = False) -> list[str]:
+        """What to ask the user to confirm, leaving out what they already set themselves."""
+        return [msg for key, msg in self.confirm.items()
+                if not (key == "weight" and weight_manual) and not (key == "dims" and dims_manual)]
 
 
 PACKAGING_FACTOR, PACKAGING_KG = 1.1, 0.1  # boxed weight estimated from the product's own weight
+DIMS_AGREE = CONFLICT
+
+Entry = tuple[str, float, str]  # (page, value compared, how it's shown)
 
 
-def _agree(values: list[float]) -> tuple[str, float]:
-    lo, hi, mid = min(values), max(values), statistics.median(values)
-    spread = (hi - lo) / mid if mid else 0.0
-    if len(values) == 1:
-        return "unverified", values[0]
-    if spread <= AGREE:
-        return "verified", mid
-    if spread <= CONFLICT:  # close enough: take the median but call it unverified
-        return "unverified", mid
-    return "conflict", hi
+def _names(names: list[str]) -> str:
+    """['A'] -> 'A', ['A', 'B', 'C'] -> 'A, B and C'."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _lacks(missing: list[str], noun: str) -> str:
+    return f"{_names(missing)} {'does' if len(missing) == 1 else 'do'}n't list {noun}"
 
 
 def _backed_by(package_value: float, item_values: list[float], low: float) -> bool:
@@ -310,51 +342,115 @@ def _backed_by(package_value: float, item_values: list[float], low: float) -> bo
     return any(low * package_value <= v <= package_value * (1 + AGREE) for v in item_values)
 
 
+def _said(group: list[Entry]) -> str:
+    return _names([f"{src} ({label})" for src, _, label in group])
+
+
+def _groups(entries: list[Entry], tolerance: float) -> list[list[Entry]]:
+    """Pages whose values agree (within ``tolerance`` of the group's smallest), biggest group first."""
+    groups: list[list[Entry]] = []
+    for e in sorted(entries, key=lambda e: e[1]):
+        if groups and e[1] <= groups[-1][0][1] * (1 + tolerance):
+            groups[-1].append(e)
+        else:
+            groups.append([e])
+    return sorted(groups, key=len, reverse=True)  # stable: equal sizes stay smallest-value first
+
+
+def _pick(entries: list[Entry], tolerance: float) -> tuple[str, float | None, list[list[Entry]]]:
+    """-> (status, value, groups). A tie between the biggest groups gives no value."""
+    if not entries:
+        return "missing", None, []
+    groups = _groups(entries, tolerance)
+    if len(groups) > 1 and len(groups[0]) == len(groups[1]):
+        return "conflict", None, groups
+    value = statistics.median(v for _, v, _ in groups[0])
+    if len(groups) > 1:
+        return "majority", value, groups
+    return ("verified" if len(groups[0]) > 1 else "unverified"), value, groups
+
+
+def _describe(what: str, noun: str, shown: str, groups: list[list[Entry]], missing: list[str]) -> str:
+    """'Weight 1.05 kg: Amazon (1 kg boxed) and B&H (1.1 kg boxed) agree, but KSP (2.5 kg boxed) differs;
+    Bug doesn't list a weight.'"""
+    top, others = groups[0], [e for g in groups[1:] for e in g]
+    text = (f"{what} {shown} comes only from {_said(top)}" if len(top) == 1
+            else f"{what} {shown}: {_said(top)} agree")
+    if others:
+        text += f", but {_said(others)} {'differs' if len(others) == 1 else 'differ'}"
+    if missing:
+        text += f"; {_lacks(missing, noun)}"
+    return text + "."
+
+
+def _split(what: str, noun: str, groups: list[list[Entry]], missing: list[str]) -> str:
+    """'No weight is used: the pages split evenly - Amazon (1 kg) vs B&H (2.5 kg).'"""
+    text = f"No {what} is used: the store pages split evenly - " + " vs ".join(_said(g) for g in groups)
+    if missing:
+        text += f"; {_lacks(missing, noun)}"
+    return text + ". Please set it yourself."
+
+
 def consensus(observations: list[Observation]) -> Consensus:
     msgs: list[str] = []
+    confirm: dict[str, str] = {}
+    pages = list(dict.fromkeys(o.source for o in observations))
+
     # weight: prefer package weights; fall back to item weight plus packaging
-    pkg = [(o.source, o.weight_kg) for o in observations if o.weight_kg and o.weight_kind == "package"]
-    item = [(o.source, o.weight_kg) for o in observations if o.weight_kg and o.weight_kind != "package"]
+    pkg = [(o.source, o.weight_kg, f"{o.weight_kg:g} kg boxed") for o in observations
+           if o.weight_kg and o.weight_kind == "package"]
+    item = [(o.source, o.weight_kg, f"{o.weight_kg:g} kg") for o in observations
+            if o.weight_kg and o.weight_kind != "package"]
     use, estimated = (pkg, False) if pkg else (item, True)
-    weight, w_status = None, "missing"
-    if use:
-        w_status, weight = _agree([v for _, v in use])
-        if w_status == "unverified" and not estimated and _backed_by(weight, [v for _, v in item], 0.6):
-            w_status = "verified"  # another page's product weight fits inside this boxed weight
+    w_status, weight, groups = _pick(use, AGREE)
+    if w_status == "unverified" and not estimated and _backed_by(weight, [v for _, v, _ in item], 0.6):
+        w_status = "verified"  # another page's product weight fits inside this boxed weight
+    no_weight = [p for p in pages if p not in {o.source for o in observations if o.weight_kg}]
+    if weight is not None:
         if estimated:
             weight = round(weight * PACKAGING_FACTOR + PACKAGING_KG, 3)
             msgs.append("only the product weight was found - added ~10% + 0.1 kg for the box")
-        if w_status == "conflict":
-            msgs.append("stores disagree on the weight: " + ", ".join(f"{s} {v:g} kg" for s, v in use)
-                        + f" - using {max(v for _, v in use):g} kg")
+        if w_status == "majority" or no_weight:
+            shown = f"{weight:g} kg" + (" (the product's weight plus an allowance for the box)" if estimated else "")
+            confirm["weight"] = _describe("Weight", "a weight", shown, groups, no_weight)
+    elif w_status == "conflict":
+        msgs.append(_split("weight", "a weight", groups, no_weight))
     else:
-        msgs.append("no weight found on any store page")
+        msgs.append("no weight found on any store page" + (f" (checked: {_names(pages)})" if pages else ""))
+
+    def cm(d):
+        return "x".join(f"{x:g}" for x in d) + " cm"
 
     pkg_d = [(o.source, o.dims_cm) for o in observations if o.dims_cm and o.dims_kind == "package"]
     item_d = [(o.source, o.dims_cm) for o in observations if o.dims_cm and o.dims_kind != "package"]
     use_d = pkg_d or item_d
-    dims, d_status = None, "missing"
-    if use_d:
-        volumes = [d[0] * d[1] * d[2] for _, d in use_d]
-        d_status, vol = _agree(volumes)
-        if d_status == "unverified" and pkg_d and _backed_by(vol, [d[0] * d[1] * d[2] for _, d in item_d], 0.3):
-            d_status = "verified"
-        dims = min((d for _, d in use_d), key=lambda d: abs(d[0] * d[1] * d[2] - vol))
-        if d_status == "conflict":
-            dims = max((d for _, d in use_d), key=lambda d: d[0] * d[1] * d[2])
-            msgs.append("stores disagree on the size: " + ", ".join(
-                f"{s} {'x'.join(f'{x:g}' for x in d)} cm" for s, d in use_d))
+    by_source = dict(use_d)
+    entries = [(src, d[0] * d[1] * d[2], cm(d) + (" boxed" if pkg_d else "")) for src, d in use_d]
+    d_status, vol, groups = _pick(entries, DIMS_AGREE)
+    if d_status == "unverified" and pkg_d and _backed_by(vol, [d[0] * d[1] * d[2] for _, d in item_d], 0.3):
+        d_status = "verified"
+    no_dims = [p for p in pages if p not in {o.source for o in observations if o.dims_cm}]
+    dims = None
+    if vol is not None:
+        dims = min((by_source[src] for src, _, _ in groups[0]),
+                   key=lambda d: abs(d[0] * d[1] * d[2] - vol))
         if not pkg_d:
             msgs.append("box size unknown - using the product's own dimensions")
+        if d_status == "majority" or no_dims:
+            confirm["dims"] = _describe("Size", "a size", cm(dims), groups, no_dims)
+    elif d_status == "conflict":
+        msgs.append(_split("size", "a size", groups, no_dims))
     else:
-        msgs.append("no dimensions found")
+        msgs.append("no dimensions found" + (f" (checked: {_names(pages)})" if pages else ""))
 
     if w_status == "missing":
         status = "missing"
     elif "conflict" in (w_status, d_status):
         status = "conflict"
+    elif "majority" in (w_status, d_status):
+        status = "majority"
     elif w_status == "verified" and d_status in ("verified", "missing"):
         status = "verified"
     else:
         status = "unverified"
-    return Consensus(status, weight, dims, w_status, d_status, msgs)
+    return Consensus(status, weight, dims, w_status, d_status, msgs, confirm)

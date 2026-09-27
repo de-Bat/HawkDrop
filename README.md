@@ -121,7 +121,7 @@ hawksense compare "WH-1000XM5" --explore   # also price services you haven't set
 | Service | Warehouses | Notable rules |
 |---|---|---|
 | Dealtas | US (Delaware) | no sales tax; $20 minimum; volumetric (in³/139) only above 17×12×4 in; taxes billed through the service |
-| RedBox | US, UK | ~$3.50 up to 250 g, ~$19.50/kg, per 100 g; customs handling included |
+| RedBox | US (Edison, NJ), EU (Netherlands) | published price table per 100 g (US: $15 up to 250 g, $21 for 1 kg); NJ sales tax; max 20 kg; taxes paid through RedBox |
 | Zipy | US, UK, DE, CN | buys for you (no address); service fee on the order; taxes included |
 | MyUS | US (Florida) | 7% FL sales tax; rates from $9.99, Premium $9.99/month; courier collects taxes |
 | Shipito | US (Oregon), US-CA (California) | $3.25 handling ($2.25 Premium); tax-free Oregon needs Premium |
@@ -140,7 +140,9 @@ How a forwarded price is built:
    come from the store pages (see [Weight and size](#weight-and-size)) or from you. If neither
    is known, a typical weight for the item's category is assumed and flagged,
 4. **handling, insurance and service fees** as the service charges them,
-5. **Israeli import tax** on goods + shipping, with the same exemptions as direct orders.
+5. **Israeli import tax** on goods + shipping, with the same exemptions as direct orders, plus
+   the state's computer and security fees on taxed parcels (21 ILS over $100, 70 ILS over $500,
+   91 ILS over $1000).
    It's paid either through the service (plus its fee) or to the courier (plus its clearance fee).
 
 `compare` shows which address to ship the order to. In the web app, add forwarders under

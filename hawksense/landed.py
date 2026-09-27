@@ -33,15 +33,25 @@ class Destination:
     clearance_fee: float = 0.0  # courier handling fee (destination currency) when taxes are due
     duty_rates: dict[str, float] = field(default_factory=dict)
     same_market: tuple[str, ...] = ()  # origin countries treated as domestic (e.g. EU single market)
+    # state fees on imports that owe tax, by goods value: ((up to USD, fee in destination currency), ...)
+    state_fees: tuple[tuple[float, float], ...] = ()
 
     def duty_for(self, category: str) -> float:
         return self.duty_rates.get(category, self.duty_rates.get("default", 0.0))
+
+    def state_fee(self, goods_usd: float) -> float:
+        for up_to, fee in self.state_fees:
+            if goods_usd <= up_to:
+                return fee
+        return self.state_fees[-1][1] if self.state_fees else 0.0
 
 
 DESTINATIONS: dict[str, Destination] = {d.code: d for d in [
     Destination(
         "IL", "Israel", "ILS", vat_rate=0.18, vat_exempt_usd=75.0, duty_exempt_usd=500.0,
         clearance_fee=35.0,
+        # computer fee (21 ILS) and security fee (49 ILS) on taxed imports; as listed by RedBox, 2026-09-27
+        state_fees=((100.0, 0.0), (500.0, 21.0), (1000.0, 70.0), (float("inf"), 91.0)),
         duty_rates={"electronics": 0.0, "computers": 0.0, "phones": 0.0, "cameras": 0.0, "appliances": 0.0,
                     "toys": 0.0, "clothing": 0.12, "shoes": 0.12, "furniture": 0.08, "default": 0.06},
     ),
@@ -69,6 +79,8 @@ def destination_from_config(cfg: dict) -> Destination:
     allowed = {"name", "currency", "vat_rate", "vat_exempt_usd", "duty_exempt_usd",
                "threshold_includes_shipping", "clearance_fee"}
     overrides = {k: v for k, v in cfg.items() if k in allowed}
+    if isinstance(cfg.get("state_fees"), list):  # [[100, 0], [500, 21], ...] in config.toml
+        overrides["state_fees"] = tuple((float(a), float(b)) for a, b in cfg["state_fees"])
     if "duty_rates" in cfg:
         overrides["duty_rates"] = {**base.duty_rates, **cfg["duty_rates"]}
     return replace(base, **overrides)
@@ -169,6 +181,9 @@ def landed_cost(
             lc.fees = dest.clearance_fee
             if dest.clearance_fee:
                 notes.append("courier clearance fee")
+            if state := dest.state_fee(goods_usd):
+                lc.fees += state
+                notes.append(f"state import fees {state:g} {dest.currency}")
     return lc
 
 
@@ -225,6 +240,9 @@ def forwarded_cost(
     lines.append((f"{fwd.name} shipping, {chargeable:g} kg", intl))
     if dims_cm and chargeable > wh.rate.chargeable_kg(weight_kg):
         notes.append(f"charged by volumetric weight ({chargeable:g} kg)")
+    too_heavy = bool(wh.rate.max_kg and chargeable > wh.rate.max_kg)
+    if too_heavy:
+        notes.append(f"over {fwd.name}'s {wh.rate.max_kg:g} kg limit - it may refuse this parcel")
 
     # 4. the service's own fees
     fees = 0.0
@@ -243,13 +261,16 @@ def forwarded_cost(
         lines.append((f"service fee {fwd.service_fee_rate:.0%}", service))
 
     lc = LandedCost(dest.currency, item_dest, local + intl, fees=fees, sales_tax=sales_tax, domestic=False,
-                    notes=notes, route=route.key, route_label=route.label, lines=lines,
-                    set_up=route.account is not None)
+                    shipping_known=not too_heavy, notes=notes, route=route.key, route_label=route.label,
+                    lines=lines, set_up=route.account is not None)
 
     # 5. import taxes on arrival: goods (incl. the sales tax you paid) + freight + insurance
     goods_usd = fx.convert(goods_value, dest.currency, "USD")
     freight = intl + insurance
     if _import_taxes(lc, goods_value, freight, goods_usd, fx.convert(freight, dest.currency, "USD"), dest, category):
+        if state := dest.state_fee(goods_usd):
+            lc.fees += state
+            lines.append(("state import fees", state))
         if fwd.collects_import_taxes:
             notes.append(f"taxes paid through {fwd.name}")
             if fwd.tax_handling_fee:

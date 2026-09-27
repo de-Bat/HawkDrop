@@ -53,6 +53,14 @@ class LandedCostTest(unittest.TestCase):
         lc = landed_cost(100, "ILS", resolve_store("ivory"), IL, self.fx)
         self.assertFalse(lc.shipping_known)
 
+    def test_state_fees_by_value(self):
+        self.assertEqual([IL.state_fee(v) for v in (90, 100, 101, 500, 999, 1500)], [0, 0, 21, 21, 70, 91])
+        lc = landed_cost(600, "USD", resolve_store("https://www.ebay.com/itm/1"), IL, self.fx,
+                         category="electronics", shipping=0)
+        self.assertEqual(lc.fees, IL.clearance_fee + 70)  # courier fee + computer and security fees
+        amazon = landed_cost(600, "USD", resolve_store("amazon_us"), IL, self.fx, category="electronics")
+        self.assertEqual(amazon.fees, 0)  # taxes prepaid at checkout: no fees on arrival
+
     def test_config_overrides(self):
         dest = destination_from_config({"code": "IL", "vat_exempt_usd": 150, "duty_rates": {"clothing": 0}})
         self.assertEqual(dest.vat_exempt_usd, 150)

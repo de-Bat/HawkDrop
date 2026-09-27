@@ -205,7 +205,7 @@ def build(db, cfg, dest_code: str | None = None) -> tuple[Destination, dict[str,
     over = merge(ls["fetched"], ls["config"], ls["manual"])
     dest_over = (over.get("destination") or {}).get(code, {})
     dest = destination_from_config({"code": code, **dest_over})
-    return dest, forwarders_from_config(over.get("forwarders"))
+    return dest, forwarders_from_config(over.get("forwarders"), strict=False)
 
 
 def explain(db, cfg, dest_code: str | None = None) -> dict[str, tuple[object, str]]:

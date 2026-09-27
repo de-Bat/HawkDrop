@@ -33,7 +33,10 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from dataclasses import dataclass, fields, replace
+
+from hawksense.rate_tables import REDBOX_EUROPE, REDBOX_US
 
 EU_COUNTRIES = frozenset({"DE", "FR", "IT", "ES", "NL", "BE", "AT", "IE", "PL", "PT", "SE", "FI", "DK", "EU"})
 
@@ -68,6 +71,9 @@ class RateCard:
     vol_divisor: float | None = 5000.0  # cm³ per kg for volumetric weight; None = weight only
     min_price: float = 0.0  # minimum charge per package
     vol_free_cm: tuple[float, float, float] | None = None  # parcels up to this size are charged by weight only
+    max_kg: float | None = None  # heaviest chargeable weight the service accepts
+    table: tuple[tuple[float, float], ...] | None = None  # published price list: (up to kg, price) rows;
+    # when set it decides the price, and first/additional only apply beyond its last row
 
     def _small(self, dims_cm: tuple[float, float, float]) -> bool:
         return bool(self.vol_free_cm) and all(d <= f for d, f in zip(sorted(dims_cm), sorted(self.vol_free_cm)))
@@ -76,11 +82,25 @@ class RateCard:
         kg = weight_kg
         if dims_cm and self.vol_divisor and not self._small(dims_cm):
             kg = max(kg, dims_cm[0] * dims_cm[1] * dims_cm[2] / self.vol_divisor)
-        kg = max(kg, self.min_kg, self.first_kg)
+        kg = max(kg, self.min_kg)
+        if self.table:
+            for up_to, _ in self.table:
+                if kg <= up_to + 1e-9:
+                    return up_to
+            last = self.table[-1][0]
+            return last + math.ceil(round((kg - last) / self.step_kg, 6)) * self.step_kg
+        kg = max(kg, self.first_kg)
         extra = math.ceil(round((kg - self.first_kg) / self.step_kg, 6)) if kg > self.first_kg else 0
         return self.first_kg + extra * self.step_kg
 
     def price(self, chargeable_kg: float) -> float:
+        if self.table:
+            for up_to, price in self.table:
+                if chargeable_kg <= up_to + 1e-9:
+                    return max(self.min_price, price)
+            last_kg, last_price = self.table[-1]
+            steps = max(0, round((chargeable_kg - last_kg) / self.step_kg))
+            return max(self.min_price, last_price + steps * self.additional)
         extra = max(0, round((chargeable_kg - self.first_kg) / self.step_kg))
         return max(self.min_price, self.first + extra * self.additional)
 
@@ -124,9 +144,10 @@ def _usd(first, additional, **kw) -> RateCard:
     return RateCard("USD", first, additional, **kw)
 
 
-# Checked 2026-09-27. The service websites were not reachable from where this was written, so the
-# "verified" values come from web-search excerpts of each service's own pages (named in each entry);
-# everything else is an estimate. Check the live price lists and override in config.toml or the app.
+# Checked 2026-09-27. RedBox's price list was read from its website; for the other services the
+# "verified" values come from web-search excerpts of their own pages or reviews (named in each entry),
+# since their sites weren't reachable. Everything else is an estimate. Check the live price lists and
+# override in config.toml or the app.
 DEALTAS_SMALL_CM = (43.0, 30.0, 10.0)  # 17 x 12 x 4 in: charged by weight only
 IN3_PER_LB_139 = 139 * 16.387064 / 0.45359237  # "L x W x H (in) / 139" as cm³ per kg (~5022)
 
@@ -146,15 +167,22 @@ FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
     ),
     Forwarder(
         "redbox", "RedBox", "USD",
-        (Warehouse("US", "US", "United States",
-                   _usd(3.5, 1.95, first_kg=0.25, step_kg=0.1), sales_tax=0.0, transit="7-14 days"),
-         Warehouse("UK", "UK", "United Kingdom", RateCard("GBP", 11.0, 4.0), transit="7-14 days")),
+        (Warehouse("US", "US", "Edison, New Jersey",
+                   _usd(15.0, 1.0, first_kg=0.25, step_kg=0.1, table=REDBOX_US, max_kg=20.0),
+                   sales_tax=0.06625, transit="14-21 business days"),
+         Warehouse("EU", "NL", "Nieuw-Vennep, Netherlands",
+                   _usd(15.0, 0.5, first_kg=0.25, step_kg=0.1, table=REDBOX_EUROPE, max_kg=20.0),
+                   transit="14-21 business days")),
         collects_import_taxes=True, tax_handling_fee=0.0,
-        notes="Israeli service with addresses in the US and Europe; customs fees built into the price. "
-              "UK/Europe rates are estimates.",
-        verified=("US: about $3.50 up to 250 g, about $19.50 per kg, charged per 100 g on actual or "
-                  "volumetric weight, whichever is higher (redboxparcel.com; Maariv, reutbuyitforme.com)",
-                  "customs handling built into the price (ynet comparison)"),
+        notes="Israeli service with warehouses in New Jersey (US stores charge NJ sales tax) and the "
+              "Netherlands (serves EU stores). Prices are to a pickup point; home delivery of small "
+              "parcels (up to 4 kg / 30x30x40 cm) is $6 more. Consolidation $3 per package, repacking "
+              "$5, 21 days' free storage. Max 20 kg and 60x40x40 cm. Taxes are paid through RedBox.",
+        verified=("full US and Europe price tables per 100 g, pickup-point prices "
+                  "(redboxparcel.com price list, 2026-09-27)",
+                  "physical or volumetric weight (L x W x H / 5000), whichever is higher; max 20 kg, "
+                  "60x40x40 cm; home delivery +$6 for small parcels; consolidation $3/package; "
+                  "US warehouse in Edison, NJ; Europe warehouse in the Netherlands (redboxparcel.com)"),
     ),
     Forwarder(
         "zipy", "Zipy (buys for you)", "USD",
@@ -234,9 +262,19 @@ def _warehouse_from(code: str, cfg: dict, base: Warehouse | None) -> Warehouse:
                      float(cfg.get("sales_tax", 0.0)), str(cfg.get("transit", "")))
 
 
-def forwarders_from_config(cfg: dict | None) -> dict[str, Forwarder]:
-    """Built-in services with the [forwarders.*] tables from config.toml applied."""
+def forwarders_from_config(cfg: dict | None, strict: bool = True) -> dict[str, Forwarder]:
+    """Built-in services with the [forwarders.*] tables from config.toml applied.
+
+    ``strict=False`` skips entries that can't be used (e.g. an override for a warehouse a service
+    no longer has) with a warning, instead of stopping.
+    """
     out = dict(FORWARDERS)
+
+    def problem(message: str):
+        if strict:
+            raise SystemExit(f"error: {message}")
+        print(f"warning: ignoring {message}", file=sys.stderr)
+
     simple = {f.name for f in fields(Forwarder)} - {"key", "warehouses"}
     for key, table in (cfg or {}).items():
         if not isinstance(table, dict):
@@ -249,7 +287,8 @@ def forwarders_from_config(cfg: dict | None) -> dict[str, Forwarder]:
             try:
                 wh = _warehouse_from(code, wcfg, existing)
             except (TypeError, ValueError) as exc:
-                raise SystemExit(f"error: [forwarders.{key}.warehouses.{code}] {exc}") from None
+                problem(f"[forwarders.{key}.warehouses.{code}] {exc}")
+                continue
             warehouses = [w for w in warehouses if w.code != wh.code] + [wh]
         overrides = {k: v for k, v in table.items() if k in simple}
         if base:
@@ -258,7 +297,7 @@ def forwarders_from_config(cfg: dict | None) -> dict[str, Forwarder]:
             out[key] = Forwarder(key, overrides.pop("name", key), overrides.pop("currency", "USD"),
                                  tuple(warehouses), **overrides)
         else:
-            raise SystemExit(f"error: [forwarders.{key}] is not a built-in service - define at least one warehouse")
+            problem(f"[forwarders.{key}] is not a built-in service - define at least one warehouse")
     return out
 
 

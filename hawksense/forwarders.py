@@ -36,7 +36,7 @@ import re
 import sys
 from dataclasses import dataclass, fields, replace
 
-from hawksense.rate_tables import REDBOX_EUROPE, REDBOX_US
+from hawksense.rate_tables import DEALTAS_US, REDBOX_EUROPE, REDBOX_US, SHIPITO_US
 
 EU_COUNTRIES = frozenset({"DE", "FR", "IT", "ES", "NL", "BE", "AT", "IE", "PL", "PT", "SE", "FI", "DK", "EU"})
 
@@ -134,6 +134,8 @@ class Forwarder:
     needs_address: bool = True  # you get a personal address/suite at each warehouse
     notes: str = ""
     verified: tuple[str, ...] = ()  # values checked against the service's published terms, with the source
+    customs_freight_per_kg: float | None = None  # freight the service declares to customs per chargeable kg
+    # (instead of the shipping price), in the service's currency
 
     def warehouse(self, code: str) -> Warehouse | None:
         code = code.upper()
@@ -144,26 +146,30 @@ def _usd(first, additional, **kw) -> RateCard:
     return RateCard("USD", first, additional, **kw)
 
 
-# Checked 2026-09-27. RedBox's price list was read from its website; for the other services the
-# "verified" values come from web-search excerpts of their own pages or reviews (named in each entry),
-# since their sites weren't reachable. Everything else is an estimate. Check the live price lists and
-# override in config.toml or the app.
+# Checked 2026-09-27. RedBox, DealTas and Shipito were read from their websites (price tables in
+# rate_tables.py); for the others the "verified" values come from web-search excerpts of their own
+# pages or reviews (named in each entry), since their sites weren't reachable. Everything else is an
+# estimate. Check the live price lists and override in config.toml or the app.
 DEALTAS_SMALL_CM = (43.0, 30.0, 10.0)  # 17 x 12 x 4 in: charged by weight only
-IN3_PER_LB_139 = 139 * 16.387064 / 0.45359237  # "L x W x H (in) / 139" as cm³ per kg (~5022)
 
 FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
     Forwarder(
         "dealtas", "Dealtas", "USD",
-        (Warehouse("US", "US", "Delaware",
-                   _usd(13.0, 5.5, min_price=20.0, vol_divisor=IN3_PER_LB_139, vol_free_cm=DEALTAS_SMALL_CM),
-                   sales_tax=0.0, transit="7-14 days"),),
-        collects_import_taxes=True, tax_handling_fee=5.0,
-        notes="Israeli service with a tax-free Delaware address; delivers to your door with customs "
-              "cleared and taxes billed through the service. Also offers FixDeal fixed prices per product "
-              "category. Per-pound rates are estimates.",
-        verified=("minimum shipping charge $20 (dealtas.com FAQ)",
-                  "volumetric weight = L x W x H in inches / 139, only for parcels over 17 x 12 x 4 in; "
-                  "smaller parcels by weight only (dealtas.com rates)"),
+        (Warehouse("US", "US", "Boston, Massachusetts",
+                   _usd(25.0, 5.5, table=DEALTAS_US, vol_free_cm=DEALTAS_SMALL_CM),
+                   sales_tax=0.0625, transit="7-14 business days"),),
+        collects_import_taxes=True, tax_handling_fee=0.0, customs_freight_per_kg=5.0,
+        notes="Israeli service, warehouse in Boston (US stores charge MA sales tax). \"Special Air\" "
+              "prices; Priority (UPS/FedEx, 3-5 days) costs more. One price with no fees: repacking, "
+              "consolidation and insurance up to $100 included. Taxes are collected up front and "
+              "customs cleared by DealTas. 14 days' free storage, then $6/week. Up to 25% off for "
+              "frequent shippers.",
+        verified=("full Special Air price table to 20 kg: $25 up to 0.5 kg, $32 up to 1 kg ... $260 for "
+                  "20 kg (dealtas.com rates, 2026-09-27)",
+                  "physical weight up to 43x30x10 cm, else the higher of physical and volumetric "
+                  "(L x W x H / 5000); no weight limit (dealtas.com FAQ)",
+                  "warehouse in Boston; taxes collected up front; declared shipping for customs is "
+                  "$5 per chargeable kg; 14 days' free storage (dealtas.com FAQ)"),
     ),
     Forwarder(
         "redbox", "RedBox", "USD",
@@ -207,13 +213,21 @@ FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
     ),
     Forwarder(
         "shipito", "Shipito", "USD",
-        (Warehouse("US", "US", "Portland, Oregon", _usd(19.0, 5.0), sales_tax=0.0, transit="5-15 days"),
-         Warehouse("US-CA", "US", "Torrance, California", _usd(19.0, 5.0), sales_tax=0.10, transit="5-15 days")),
+        (Warehouse("US", "US", "Portland, Oregon", _usd(31.53, 10.5, table=SHIPITO_US),
+                   sales_tax=0.0, transit="5-15 business days"),
+         Warehouse("US-CA", "US", "Torrance, California", _usd(31.53, 10.5, table=SHIPITO_US),
+                   sales_tax=0.10, transit="5-15 business days")),
         handling_fee=3.25,
-        notes="The sales-tax-free Oregon address needs a Premium account, which also cuts the handling fee "
-              "to $2.25 (set handling_fee = 2.25 if you have one). Shipping rates are estimates.",
-        verified=("processing fee $3.25 per package on a free account, $2.25 with Premium; the Oregon "
-                  "tax-free warehouse is Premium-only (shipito.com FAQ, as of 2026-08-02)",),
+        notes="Prices are the cheapest carrier Shipito quotes to Israel at each weight (its own "
+              "Priority Parcel, USPS Priority Mail, DHL); the courier or post collects Israeli taxes. "
+              "The sales-tax-free Oregon address needs Premium, which also cuts handling to $2.25 (set "
+              "handling_fee = 2.25) and consolidation from $5.50 to $3.25 per package. Free storage "
+              "7 days (45 with Premium); insurance from $3.",
+        verified=("carrier quotes to Israel from shipito.com's calculator, 0.25-20 kg: $31.53 for 250 g, "
+                  "$63.03 for 1 kg, $125.74 for 5 kg, $510.79 for 20 kg (2026-09-27)",
+                  "processing fee $3.25 per package ($2.25 Premium); consolidation $5.50 ($3.25); "
+                  "storage 7 days free (45 Premium); insurance from $3 (shipito.com pricing, 2026-09-27)",
+                  "the Oregon tax-free warehouse is Premium-only (shipito.com FAQ)"),
     ),
     Forwarder(
         "stackry", "Stackry", "USD",
@@ -244,6 +258,10 @@ FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
 def _rate_from(cfg: dict, base: RateCard | None) -> RateCard:
     names = {f.name for f in fields(RateCard)}
     overrides = {k: v for k, v in cfg.items() if k in names}
+    if overrides.get("table") is not None:  # [[kg, price], ...] from config.toml or the rules feed
+        overrides["table"] = tuple((float(kg), float(price)) for kg, price in overrides["table"]) or None
+    if isinstance(overrides.get("vol_free_cm"), list):
+        overrides["vol_free_cm"] = tuple(float(x) for x in overrides["vol_free_cm"])
     if base is not None:
         return replace(base, **overrides)
     missing = {"currency", "first", "additional"} - overrides.keys()

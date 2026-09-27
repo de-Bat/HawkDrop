@@ -267,6 +267,8 @@ def forwarded_cost(
     # 5. import taxes on arrival: goods (incl. the sales tax you paid) + freight + insurance
     goods_usd = fx.convert(goods_value, dest.currency, "USD")
     freight = intl + insurance
+    if fwd.customs_freight_per_kg is not None:  # e.g. DealTas declares $5 per chargeable kg
+        freight = fee(fwd.customs_freight_per_kg * chargeable) + insurance
     if _import_taxes(lc, goods_value, freight, goods_usd, fx.convert(freight, dest.currency, "USD"), dest, category):
         if state := dest.state_fee(goods_usd):
             lc.fees += state

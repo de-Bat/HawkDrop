@@ -61,3 +61,32 @@ REDBOX_EUROPE = (
     (18.8, 126.8), (18.9, 127.4), (19, 128), (19.1, 128.5), (19.2, 129), (19.3, 129.5), (19.4, 130),
     (19.5, 130.5), (19.6, 131), (19.7, 131.5), (19.8, 132), (19.9, 132.5), (20, 133), (21, 176),
 )
+
+# DealTas, dealtas.com/page/rates, "Special Air" (7-14 business days), USD, from the US warehouse
+# (Boston). Charged by physical weight if the parcel is at most 43x30x10 cm, otherwise the higher of
+# physical and volumetric (L x W x H / 5000). No weight limit. Checked 2026-09-27.
+DEALTAS_US = (
+    (0.5, 25), (1, 32), (1.5, 41), (2, 49), (2.5, 57), (3, 64), (3.5, 72), (4, 79), (4.5, 87), (5, 95),
+    (5.5, 101), (6, 106), (6.5, 112), (7, 117), (7.5, 123), (8, 128), (8.5, 134), (9, 139), (9.5, 145),
+    (10, 150), (10.5, 156), (11, 161), (11.5, 167), (12, 172), (12.5, 178), (13, 183), (13.5, 189), (14, 194),
+    (14.5, 200), (15, 205), (15.5, 211), (16, 216), (16.5, 222), (17, 227), (17.5, 233), (18, 238),
+    (18.5, 244), (19, 249), (19.5, 255), (20, 260),
+)
+
+# DealTas "Priority" (UPS/FedEx, 3-5 business days), same page and rules.
+DEALTAS_US_PRIORITY = (
+    (0.5, 66), (1, 73), (1.5, 80), (2, 94), (2.5, 101), (3, 110), (3.5, 124), (4, 142), (4.5, 150), (5, 158),
+    (5.5, 165), (6, 174), (6.5, 182), (7, 190), (7.5, 197), (8, 205), (8.5, 214), (9, 222), (9.5, 229),
+    (10, 237), (10.5, 234), (11, 242), (11.5, 250), (12, 258), (12.5, 266), (13, 273), (13.5, 282), (14, 290),
+    (14.5, 297), (15, 305), (15.5, 313), (16, 322), (16.5, 329), (17, 337), (17.5, 345), (18, 352),
+    (18.5, 361), (19, 369), (19.5, 377), (20, 384),
+)
+
+# Shipito, shipito.com international shipping calculator, to Israel (Tel Aviv), USD: the cheapest
+# method quoted at each weight (Shipito Priority Parcel up to 1.5 kg, USPS Priority Mail 2-7 kg,
+# DHL Express 10-20 kg). Between samples the next sample up applies, so estimates err high.
+# Excludes Shipito's per-package processing fee. Checked 2026-09-27.
+SHIPITO_US = (
+    (0.25, 31.53), (0.5, 47.26), (1, 63.03), (1.5, 78.81), (2, 88.72), (2.5, 94.88), (3, 101.12), (4, 113.19),
+    (5, 125.74), (7, 153.7), (10, 299.9), (15, 405.27), (20, 510.79),
+)

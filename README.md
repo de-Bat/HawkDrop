@@ -109,7 +109,7 @@ set up, and uses the cheapest.
 ```bash
 hawksense forwarders                    # services, their warehouses, fees and rates
 hawksense forwarder add dealtas         # asks for the address it gave you
-hawksense forwarder add redbox          # asks for each warehouse: US, UK (skip what you don't use)
+hawksense forwarder add redbox          # asks for each warehouse: US, EU (skip what you don't use)
 hawksense forwarder add zipy            # buy-for-me service: no address needed
 hawksense forwarder add shipito --warehouse US --address "Your Name, 1 Rd #123, Portland, OR 97230"
 
@@ -120,11 +120,11 @@ hawksense compare "WH-1000XM5" --explore   # also price services you haven't set
 
 | Service | Warehouses | Notable rules |
 |---|---|---|
-| Dealtas | US (Delaware) | no sales tax; $20 minimum; volumetric (in³/139) only above 17×12×4 in; taxes billed through the service |
+| Dealtas | US (Boston, MA) | published price table (Special Air: $25 up to 0.5 kg, $32 for 1 kg, $49 for 2 kg); MA sales tax 6.25%; volumetric (cm³/5000) only above 43×30×10 cm; one price, taxes collected up front on a declared $5/kg freight |
 | RedBox | US (Edison, NJ), EU (Netherlands) | published price table per 100 g (US: $15 up to 250 g, $21 for 1 kg); NJ sales tax; max 20 kg; taxes paid through RedBox |
 | Zipy | US, UK, DE, CN | buys for you (no address); service fee on the order; taxes included |
 | MyUS | US (Florida) | 7% FL sales tax; rates from $9.99, Premium $9.99/month; courier collects taxes |
-| Shipito | US (Oregon), US-CA (California) | $3.25 handling ($2.25 Premium); tax-free Oregon needs Premium |
+| Shipito | US (Oregon), US-CA (California) | cheapest carrier quote to Israel from its calculator ($31.53 up to 250 g, $63.03 for 1 kg); $3.25 handling ($2.25 Premium); tax-free Oregon needs Premium |
 | Stackry | US (New Hampshire) | no sales tax; $1–2 receiving, $3 consolidation |
 | Planet Express | US (California) | CA sales tax; $2 handling, consolidation $5 + $2/package |
 | Forward2me | UK | UK prices include 20% VAT |
@@ -203,11 +203,11 @@ regex = 'up to \$\s*(\d+)'               # first group = the value
 [rules.sources.dealtas_rates]
 url = "https://..."                       # a page with a weight/price table
 target = "forwarders.dealtas.warehouses.US"
-format = "table"                          # sets first, first_kg, step_kg, additional
+format = "table"                          # sets the whole price table, plus first, first_kg, step_kg, additional
 ```
 
-Every fetched value is checked for range before use. A value that moves more than 50% is held
-for review, and you're notified (`rules_review`). Applied changes are also notified
+Every fetched value is checked for range before use. A value that moves more than 50% (for a
+price table: at any weight both tables list) is held for review, and you're notified (`rules_review`). Applied changes are also notified
 (`rules_changed`).
 
 ```bash
@@ -565,7 +565,7 @@ local_free_over = 35
 ships_abroad = false         # only reachable through a forwarder
 
 [forwarders.dealtas]
-tax_handling_fee = 5         # in the service's currency
+tax_handling_fee = 0         # in the service's currency
 handling_fee = 0
 insurance_rate = 0.02        # 2% of the goods value
 insurance_min = 3
@@ -577,7 +577,9 @@ first_kg = 0.5
 step_kg = 0.5
 min_kg = 0
 vol_divisor = 5000           # cm³ per kg; 0 turns off volumetric weight
-sales_tax = 0
+sales_tax = 0.0625
+# a price table replaces first/additional up to its last row: [up to kg, price]
+table = [[0.5, 25], [1, 32], [1.5, 41], [2, 49]]
 
 [forwarders.myforwarder]     # a service that isn't built in
 name = "My Forwarder"

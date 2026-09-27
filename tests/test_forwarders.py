@@ -83,13 +83,13 @@ class ForwardedCostTest(unittest.TestCase):
     def test_service_that_pays_taxes(self):
         lc = forwarded_cost(100, "USD", self.amazon, route("dealtas", address="x, New Castle, DE 19720"), IL,
                             self.fx, "electronics", weight_kg=2.0)
-        intl = (13 + 3 * 5.5) * 4  # 2 kg on a 0.5 kg card (above Dealtas's $20 minimum)
+        intl = 49 * 4  # DealTas's published price for 2 kg
         self.assertEqual(lc.sales_tax, 0)
         self.assertEqual(lc.shipping, intl)  # $100 >= Amazon's free domestic shipping threshold
-        self.assertAlmostEqual(lc.vat, (400 + intl) * 0.18)
-        self.assertEqual(lc.fees, 5 * 4)  # Dealtas tax handling, no courier clearance fee
+        self.assertAlmostEqual(lc.vat, (400 + 2 * 5 * 4) * 0.18)  # customs value uses DealTas's $5/kg freight
+        self.assertEqual(lc.fees, 0)  # one price: no handling fee, and $100 owes no state fee
         self.assertEqual(lc.route, "dealtas:US")
-        self.assertAlmostEqual(lc.total, 400 + intl + lc.vat + 20)
+        self.assertAlmostEqual(lc.total, 400 + intl + lc.vat)
 
     def test_courier_clearance_and_sales_tax(self):
         lc = forwarded_cost(100, "USD", self.amazon, route("myus"), IL, self.fx, "electronics", weight_kg=0.4)
@@ -108,7 +108,7 @@ class ForwardedCostTest(unittest.TestCase):
 
     def test_minimum_charge(self):
         lc = forwarded_cost(100, "USD", self.amazon, route("dealtas"), IL, self.fx, weight_kg=0.3)
-        self.assertIn(("Dealtas shipping, 0.5 kg", 20 * 4), lc.lines)  # $13 card price, $20 minimum
+        self.assertIn(("Dealtas shipping, 0.5 kg", 25 * 4), lc.lines)  # smallest row of the table: $25
 
     def test_redbox_published_table(self):
         card = FORWARDERS["redbox"].warehouse("US").rate

@@ -106,14 +106,31 @@ class RulesTest(unittest.TestCase):
         report = self.check(None, cfg, pages)
         applied = {c.path: c.new for c in report.applied}
         self.assertEqual(applied["destination.IL.vat_exempt_usd"], 90.0)
-        self.assertEqual(applied["forwarders.dealtas.warehouses.US.first"], 12.0)
         self.assertEqual(applied["forwarders.dealtas.warehouses.US.additional"], 6.0)
+        pending = {c.path: c.new for c in report.pending}  # $25 -> $12 and a new table: over 50%, so asked
+        self.assertEqual(pending["forwarders.dealtas.warehouses.US.first"], 12.0)
+        self.assertEqual(pending["forwarders.dealtas.warehouses.US.table"][0], [0.5, 12.0])
         self.assertTrue(any("broken" in e for e in report.errors))
 
     def test_rate_table(self):
         self.assertEqual(rules.parse_rate_table(RATE_PAGE),
-                         {"first": 12.0, "first_kg": 0.5, "step_kg": 0.5, "additional": 6.0})
+                         {"first": 12.0, "first_kg": 0.5, "step_kg": 0.5, "additional": 6.0,
+                          "table": [[0.5, 12.0], [1.0, 18.0], [1.5, 24.0], [2.0, 30.0]]})
         self.assertIsNone(rules.parse_rate_table("<table><tr><td>1 kg</td><td>$5</td></tr></table>"))
+
+    def test_feed_price_table_updates(self):
+        feed = copy.deepcopy(FEED)
+        table = feed["forwarders"]["redbox"]["warehouses"]["US"]["table"]
+        feed["forwarders"]["redbox"]["warehouses"]["US"]["table"] = [[kg, p + 1] for kg, p in table]
+        report = self.check(feed)
+        self.assertIn("forwarders.redbox.warehouses.US.table", {c.path for c in report.applied})
+        card = rules.build(self.db, Config())[1]["redbox"].warehouse("US").rate
+        self.assertEqual(card.price(card.chargeable_kg(1.0)), 22.0)
+        feed["forwarders"]["redbox"]["warehouses"]["US"]["table"] = [[1, 60.0], [2, 70.0]]  # nearly triples
+        report = self.check(feed)
+        self.assertIn("forwarders.redbox.warehouses.US.table", {c.path for c in report.pending})
+        feed["forwarders"]["redbox"]["warehouses"]["US"]["table"] = [[2, 10], [1, 5]]  # not ascending
+        self.assertTrue(self.check(feed).errors)
 
     def test_incomplete_new_forwarder_from_feed_is_refused(self):
         feed = copy.deepcopy(FEED)

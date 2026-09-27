@@ -44,11 +44,11 @@ def forwarder(f: Forwarder) -> dict:
         "key": f.key, "name": f.name, "currency": f.currency, "needs_address": f.needs_address,
         "handling_fee": f.handling_fee, "insurance_rate": f.insurance_rate, "service_fee_rate": f.service_fee_rate,
         "service_fee_min": f.service_fee_min, "collects_import_taxes": f.collects_import_taxes,
-        "tax_handling_fee": f.tax_handling_fee, "notes": f.notes,
+        "tax_handling_fee": f.tax_handling_fee, "notes": f.notes, "verified": list(f.verified),
         "warehouses": [{"code": w.code, "country": w.country, "location": w.location, "sales_tax": w.sales_tax,
                         "transit": w.transit, "rate": {"currency": w.rate.currency, "first": w.rate.first,
                                                        "first_kg": w.rate.first_kg, "additional": w.rate.additional,
-                                                       "step_kg": w.rate.step_kg}}
+                                                       "step_kg": w.rate.step_kg, "min_price": w.rate.min_price}}
                        for w in f.warehouses],
     }
 

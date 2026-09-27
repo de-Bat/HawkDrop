@@ -360,7 +360,9 @@ def cmd_stores(t: Tracker, a):
 
 def _rate_text(fwd: Forwarder) -> str:
     return "; ".join(f"{w.code}: {money(w.rate.first, w.rate.currency)} first {w.rate.first_kg:g} kg "
-                     f"+ {money(w.rate.additional, w.rate.currency)}/{w.rate.step_kg:g} kg" for w in fwd.warehouses)
+                     f"+ {money(w.rate.additional, w.rate.currency)}/{w.rate.step_kg:g} kg"
+                     + (f", min {money(w.rate.min_price, w.rate.currency)}" if w.rate.min_price else "")
+                     for w in fwd.warehouses)
 
 
 def cmd_forwarders(t: Tracker, a):
@@ -382,9 +384,12 @@ def cmd_forwarders(t: Tracker, a):
             taxes += f" ({money(f.tax_handling_fee, f.currency)})"
         rows.append([f.key, f.name, whs, ", ".join(fees) or "-", taxes])
     print(table(rows, ["key", "name", "warehouses (✓ = yours)", "fees", "import taxes"]))
-    print("\nShipping rates (estimates - check each service's price list, override in config.toml):")
+    print("\nShipping rates (check each service's price list; override in the app or config.toml):")
     for f in t.forwarders.values():
         print(f"  {f.name:<22} {_rate_text(f)}")
+        for v in f.verified:
+            print(f"  {'':<22}   ✓ {v}")
+    print("  ✓ = checked against the service's published terms (2026-09-27); everything else is an estimate")
     if accounts:
         print("\nYour addresses:")
         for x in accounts:

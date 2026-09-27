@@ -62,7 +62,8 @@ _FWD_FIELDS = {
 }
 _WH_FIELDS = {
     "first": (0.0, 1000.0), "additional": (0.0, 1000.0), "first_kg": (0.01, 50.0), "step_kg": (0.01, 50.0),
-    "min_kg": (0.0, 100.0), "vol_divisor": (0.0, 20000.0), "sales_tax": (0.0, 0.3), "country": str,
+    "min_kg": (0.0, 100.0), "vol_divisor": (0.0, 20000.0), "min_price": (0.0, 500.0), "sales_tax": (0.0, 0.3),
+    "max_kg": (0.0, 1000.0), "table": "table", "country": str,
     "location": str, "currency": str, "transit": str,
 }
 
@@ -138,10 +139,41 @@ def validate(path: str, value) -> str | None:
         return None if isinstance(value, bool) else f"{path} must be true or false"
     if spec is str:
         return None if isinstance(value, str) and len(value) < 200 else f"{path} must be text"
+    if spec == "table":
+        return _table_problem(path, value)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return f"{path} must be a number"
     lo, hi = spec
     return None if lo <= value <= hi else f"{path} must be between {lo:g} and {hi:g}"
+
+
+def _table_problem(path: str, rows) -> str | None:
+    """A price table must be ascending [kg, price] rows with sane numbers."""
+    if not isinstance(rows, (list, tuple)) or not 1 <= len(rows) <= 1000:
+        return f"{path} must be a list of [kg, price] rows"
+    last = 0.0
+    for row in rows:
+        if (not isinstance(row, (list, tuple)) or len(row) != 2
+                or not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in row)):
+            return f"{path} must be a list of [kg, price] rows"
+        kg, price = row
+        if not last < kg <= 1000 or not 0 <= price <= 20000:
+            return f"{path}: weights must go up (0-1000 kg) and prices must be 0-20000"
+        last = kg
+    return None
+
+
+def _change(old, new) -> float | None:
+    """Relative change between two numbers, or the largest one between two price tables."""
+    if isinstance(old, (int, float)) and not isinstance(old, bool) and old:
+        return abs(new - old) / abs(old)
+    if isinstance(old, (list, tuple)) and isinstance(new, (list, tuple)):
+        before = {round(float(k), 3): float(p) for k, p in old}
+        common = [(before[round(float(k), 3)], float(p)) for k, p in new if round(float(k), 3) in before]
+        if not common:
+            return float("inf")  # nothing comparable: always ask
+        return max(abs(n - o) / o if o else float("inf") for o, n in common)
+    return None
 
 
 def parse_value(text: str):
@@ -170,6 +202,8 @@ def _fwd_tree(f: Forwarder) -> dict:
     for w in f.warehouses:
         wt = {"country": w.country, "location": w.location, "sales_tax": w.sales_tax, "transit": w.transit}
         wt.update({k: v for k, v in asdict(w.rate).items() if k in _WH_FIELDS and v is not None})
+        if w.rate.table:  # JSON-shaped, so it compares equal to the feed's copy
+            wt["table"] = [[float(kg), float(price)] for kg, price in w.rate.table]
         tree["warehouses"][w.code] = wt
     return tree
 
@@ -204,7 +238,7 @@ def build(db, cfg, dest_code: str | None = None) -> tuple[Destination, dict[str,
     over = merge(ls["fetched"], ls["config"], ls["manual"])
     dest_over = (over.get("destination") or {}).get(code, {})
     dest = destination_from_config({"code": code, **dest_over})
-    return dest, forwarders_from_config(over.get("forwarders"))
+    return dest, forwarders_from_config(over.get("forwarders"), strict=False)
 
 
 def explain(db, cfg, dest_code: str | None = None) -> dict[str, tuple[object, str]]:
@@ -266,19 +300,26 @@ def _fetch_json(url: str) -> dict:
         raise FetchError(f"rules feed {url}: {exc}") from None
 
 
+_TR_OPEN = re.compile(r"<tr\b", re.I)
+_CELL = re.compile(r"<t[hd]\b[^>]{0,300}>(.{0,2000}?)</t[hd]>", re.S | re.I)
+
+
 def parse_rate_table(page: str) -> dict | None:
-    """Weight/price rows ('0.5 kg | $12.00') -> {first, first_kg, step_kg, additional}."""
+    """Weight/price rows ('0.5 kg | $12.00') -> {first, first_kg, step_kg, additional, table}."""
     pairs = {}
-    for row in re.findall(r"<tr\b.*?</tr>", page, re.S | re.I):
-        cells = [re.sub(r"<[^>]+>|&nbsp;", " ", c).strip()
-                 for c in re.findall(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", row, re.S | re.I)]
+    lower = page.lower()
+    for m in _TR_OPEN.finditer(lower):  # linear: each row looks at most 5000 characters ahead
+        end = lower.find("</tr>", m.end(), m.end() + 5000)
+        if end < 0:
+            continue
+        cells = [re.sub(r"<[^>]+>|&nbsp;", " ", c).strip() for c in _CELL.findall(page[m.end():end])]
         if len(cells) < 2:
             continue
-        m = re.search(r"(\d+(?:[.,]\d+)?)\s*(kg|lbs?|g)\b", cells[0], re.I)
+        w = re.search(r"(\d+(?:[.,]\d+)?)\s*(kg|lbs?|g)\b", cells[0], re.I)
         price = next((parse_number(c) for c in cells[1:] if re.search(r"\d", c)), None)
-        if not m or not price:
+        if not w or not price:
             continue
-        kg = float(m.group(1).replace(",", ".")) * {"kg": 1, "g": 0.001}.get(m.group(2).lower(), 0.45359237)
+        kg = float(w.group(1).replace(",", ".")) * {"kg": 1, "g": 0.001}.get(w.group(2).lower(), 0.45359237)
         pairs[round(kg, 3)] = price
     if len(pairs) < 3:
         return None
@@ -286,7 +327,8 @@ def parse_rate_table(page: str) -> dict | None:
     steps = [round(b - a, 3) for a, b in zip(ws, ws[1:])]
     step = statistics.mode(steps)
     extra = [(pairs[b] - pairs[a]) for a, b in zip(ws, ws[1:]) if round(b - a, 3) == step]
-    return {"first": pairs[ws[0]], "first_kg": ws[0], "step_kg": step, "additional": round(statistics.median(extra), 2)}
+    return {"first": pairs[ws[0]], "first_kg": ws[0], "step_kg": step, "additional": round(statistics.median(extra), 2),
+            "table": [[kg, float(pairs[kg])] for kg in ws]}
 
 
 def _incoming(rcfg: dict, report: Report, fetch_json=_fetch_json, fetch_page=fetch_html) -> dict[str, tuple]:
@@ -354,9 +396,10 @@ def check_updates(db, cfg, fetch_json=_fetch_json, fetch_page=fetch_html) -> Rep
         if _same(old, value) or (path, json.dumps(value)) in decided:
             continue
         change = Change(path, old, value, source)
-        numeric = isinstance(old, (int, float)) and not isinstance(old, bool)
-        if numeric and old and abs(value - old) / abs(old) > REVIEW_CHANGE:
-            change.note = f"changes by {abs(value - old) / abs(old):.0%} - please confirm"
+        moved = _change(old, value)
+        if moved is not None and moved > REVIEW_CHANGE:
+            change.note = (f"changes by {moved:.0%} - please confirm" if moved != float("inf")
+                           else "a new price table - please confirm")
             change.id = db.log_rule_change("fetched", source, path, old, value, "pending", change.note)
             report.pending.append(change)
         else:

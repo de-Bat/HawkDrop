@@ -9,7 +9,7 @@ price_drop              the best delivered price drops by X% (default 5%)
 sale_soon               a sales day for your items' stores starts in N days
 rules_changed           tax or forwarder rules were updated automatically
 rules_review            a fetched rule change looks odd and needs your OK
-specs_alert             an item's weight/size couldn't be found, or stores disagree
+specs_alert             an item's weight/size couldn't be found, stores disagree, or values need confirming
 check_failed            a store's price couldn't be read N times in a row
 ======================  =====================================================
 
@@ -77,7 +77,8 @@ EVENTS: dict[str, Event] = {e.key: e for e in [
     Event("sale_soon", "Sale coming up", "A sales day for your items' stores starts soon"),
     Event("rules_changed", "Rules updated", "Tax or forwarder rules were updated automatically"),
     Event("rules_review", "Rule change to review", "A fetched rule change looks unusual and needs your OK"),
-    Event("specs_alert", "Weight/size problem", "An item's weight or size couldn't be found, or stores disagree"),
+    Event("specs_alert", "Weight/size problem",
+          "An item's weight or size couldn't be found, stores disagree, or some stores don't list it - please confirm"),
     Event("check_failed", "Price check failing", "A store's price couldn't be read several times in a row"),
 ]}
 
@@ -368,7 +369,7 @@ class Notifier:
                 continue
             state = self._state(item.id)
             adv, quotes = tracker.advise(item, today)
-            in_stock = [q for q in quotes if q.point.in_stock]
+            in_stock = [q for q in quotes if q.point.in_stock and q.landed.hold is None]  # no price on hold
             best = in_stock[0] if in_stock else None
             if best:
                 total, where = best.landed.total, f"{best.store.name} ({best.landed.route_label})"
@@ -397,13 +398,23 @@ class Notifier:
                 state.update(action=adv.action)
             self._save_state(item.id, state)
 
-            if item.weight_source != "manual":
-                found, rows = tracker.specs(item)
-                if rows and found.alert:
-                    what = "couldn't find the weight" if found.status == "missing" else "stores disagree on the size"
-                    body = "; ".join(found.messages) + ". Set it by hand (edit the item) so forwarder prices are right."
-                    new.append(self.emit("specs_alert", f"{item.name}: {what}", body,
-                                         f"specs:{item.id}:{found.status}:{found.weight_kg}", item.id))
+            w_manual, d_manual = item.weight_source == "manual", item.dims_source == "manual"
+            found, rows = tracker.specs(item) if not (w_manual and d_manual) else (None, [])
+            if rows and found.alert and not w_manual:
+                what = ("couldn't find the weight" if found.status == "missing"
+                        else "store pages disagree on the weight/size")
+                body = ("; ".join(found.messages) + ". Forwarder prices for this item are on hold until you set "
+                        "the weight and size (edit the item in the app, or `hawksense track "
+                        f"'{item.name}' --weight KG --dims LxWxH`).")
+                new.append(self.emit("specs_alert", f"{item.name}: {what}", body,
+                                     f"specs:{item.id}:{found.status}:{found.weight_kg}", item.id))
+            elif rows and not found.alert and (ask := found.to_confirm(w_manual, d_manual)):
+                # values are in use, but some store pages don't list them: ask once per set of values
+                body = (" ".join(ask) + " Forwarder prices use these values. If they're right, confirm them "
+                        f"(\"Looks right\" on the item in the app, or `hawksense specs '{item.name}' --confirm`); "
+                        "if not, set them yourself.")
+                new.append(self.emit("specs_alert", f"{item.name}: please confirm the weight and size", body,
+                                     f"specs-confirm:{item.id}:{found.weight_kg}:{found.dims_text}", item.id))
             keys = {e for q in quotes for e in q.store.events} or {
                 e for o in tracker.db.offers(item) for e in tracker.store_for(o).events}
             for occ in upcoming_events(today, int(s["sale_soon_days"])):

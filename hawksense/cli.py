@@ -76,12 +76,20 @@ def _print_specs(tracker: Tracker, item: Item, only_problems: bool = False):
             print(f"  size: {size} (set by you)")
         return
     label = {"verified": f"verified by {sources} store pages", "unverified": "from one store page, not verified",
-             "conflict": "store pages disagree", "missing": "not found on any store page"}[found.status]
+             "majority": "most store pages agree", "conflict": "store pages split evenly",
+             "missing": "not found on any store page"}[found.status]
     if found.alert:
         print(f"  ⚠ size: {size} - {label}")
         for m in found.messages:
             print(f"      {m}")
-        print(f"      set it yourself: hawksense track {item.name!r} --weight KG --dims LxWxH")
+        print("      forwarder prices are on hold until you set it:")
+        print(f"      hawksense track {item.name!r} --weight KG --dims LxWxH")
+    elif (ask := found.to_confirm(manual, item.dims_source == "manual")):
+        print(f"  ? size: {size} ({label}) - please confirm")
+        for m in ask:
+            print(f"      {m}")
+        print(f"      right? hawksense specs {item.name!r} --confirm    wrong? hawksense track {item.name!r} "
+              "--weight KG --dims LxWxH")
     elif not only_problems:
         print(f"  size: {size} ({label})")
 
@@ -174,7 +182,7 @@ def cmd_check(t: Tracker, a):
         _print_specs(t, item)
         if item.target_price is not None:
             quotes = t.quotes(item)
-            if quotes and quotes[0].landed.total <= item.target_price:
+            if quotes and not quotes[0].landed.hold and quotes[0].landed.total <= item.target_price:
                 print(f"  ★ TARGET HIT: {quotes[0].store.name} "
                       f"{money(quotes[0].landed.total, t.dest.currency)} <= {money(item.target_price)}")
     new = [n for n in t.db.notifications(200) if n["id"] not in before]
@@ -189,7 +197,8 @@ def cmd_list(t: Tracker, a):
         quotes = t.quotes(item)
         best = quotes[0] if quotes else None
         rows.append([item.id, item.name, item.category, len(t.db.offers(item)),
-                     money(best.landed.total, t.dest.currency) if best else "-",
+                     ("on hold: set weight" if best.landed.hold else money(best.landed.total, t.dest.currency))
+                     if best else "-",
                      best.store.name if best else "-",
                      money(item.target_price) if item.target_price else "-"])
     if not rows:
@@ -213,8 +222,9 @@ def _quote_rows(t: Tracker, quotes: list[Quote]) -> list[list]:
         lc = q.landed
         rows.append([
             q.store.name, f"{q.store.country}", _via(t, lc), money(q.point.price, q.point.currency),
-            money(lc.item, cur), money(lc.shipping, cur) + ("" if lc.shipping_known else "?"),
-            money(lc.duty + lc.vat + lc.sales_tax, cur), money(lc.fees, cur), money(lc.total, cur),
+            *(["-"] * 4 + ["on hold"] if lc.hold else [
+                money(lc.item, cur), money(lc.shipping, cur) + ("" if lc.shipping_known else "?"),
+                money(lc.duty + lc.vat + lc.sales_tax, cur), money(lc.fees, cur), money(lc.total, cur)]),
             "yes" if q.point.in_stock else "NO", q.point.ts.date().isoformat(),
         ])
     return rows
@@ -223,10 +233,12 @@ def _quote_rows(t: Tracker, quotes: list[Quote]) -> list[list]:
 def _route_detail(t: Tracker, lc: LandedCost, best: bool) -> list[str]:
     cur = t.dest.currency
     mark = "★" if best else ("·" if lc.set_up else "?")
-    head = f"    {mark} {_via(t, lc):<22} {money(lc.total, cur):>12}"
+    head = f"    {mark} {_via(t, lc):<22} {'on hold' if lc.hold else money(lc.total, cur):>12}"
     if not lc.set_up:
         head += "   (not set up: hawksense forwarder add " + lc.route.split(":")[0] + ")"
     out = [head]
+    if lc.hold:  # no guessed numbers: the reason is printed once below the list
+        return out
     parts = [("item", lc.item)]
     parts += lc.lines if lc.lines else [("shipping", lc.shipping)]
     parts += [("sales tax", lc.sales_tax), ("customs duty", lc.duty), ("import VAT", lc.vat)]
@@ -252,10 +264,12 @@ def cmd_compare(t: Tracker, a):
             print(f"  {q.store.name}:")
             for i, lc in enumerate(q.routes):
                 print("\n".join(_route_detail(t, lc, i == 0)))
-        elif q.landed.notes:
+        elif q.landed.notes and not q.landed.hold:
             print(f"  {q.store.name} ({_via(t, q.landed)}): " + "; ".join(q.landed.notes))
+    if hold := t.specs_hold(item):
+        print(f"\n  ⚠ {hold[0].upper() + hold[1:]}\n    see `hawksense specs {item.name!r}` for what each page says")
     best = quotes[0].landed
-    if best.route != "direct":
+    if best.route != "direct" and not best.hold:
         key, _, code = best.route.partition(":")
         acc = next((x for x in t.accounts() if x.forwarder == key and x.warehouse == code), None)
         if acc and acc.address:
@@ -458,6 +472,9 @@ def cmd_forwarder_remove(t: Tracker, a):
 
 def cmd_specs(t: Tracker, a):
     item = _item(t, a.item)
+    if a.confirm:
+        item = t.confirm_specs(item)
+        print(f"Confirmed: {item.weight_kg or '-'} kg, {item.dims or '-'} cm - kept even if store pages change.\n")
     for url in a.source or []:
         try:
             t.fetch_specs(item, url)
@@ -470,11 +487,21 @@ def cmd_specs(t: Tracker, a):
         print(table([[r["source"], f"{r['weight_kg']:g} kg ({r['weight_kind']})" if r["weight_kg"] else "-",
                       f"{r['dims']} cm ({r['dims_kind']})" if r["dims"] else "-", r["ts"][:10]] for r in rows],
                     ["page", "weight", "size", "seen"]))
-        print(f"\nConsensus: {found.status}"
+        plain = {"verified": "the pages agree", "unverified": "from one page", "majority": "most pages agree",
+                 "conflict": "the pages split evenly", "missing": "nothing found"}
+        print(f"\nConsensus: {plain[found.status]}"
               + (f" - {found.weight_kg:g} kg" if found.weight_kg else "")
               + (f", {found.dims_text} cm" if found.dims_cm else ""))
         for m in found.messages:
             print(f"  • {m}")
+        if hold := t.specs_hold(item):
+            print(f"\n⚠ {hold[0].upper() + hold[1:]}")
+        if ask := found.to_confirm(item.weight_source == "manual", item.dims_source == "manual"):
+            print("\nPlease confirm:")
+            for m in ask:
+                print(f"  ? {m}")
+            print(f"  right? hawksense specs {item.name!r} --confirm    "
+                  f"wrong? hawksense track {item.name!r} --weight KG --dims LxWxH")
     else:
         print("No store pages checked yet - run `hawksense check` (or add --source URL).")
     who = {"manual": "set by you", "auto": "from store pages", None: "not set"}
@@ -800,6 +827,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("specs", help="weight and box size found on the store pages, and whether they agree")
     s.add_argument("item")
     s.add_argument("--source", action="append", metavar="URL", help="also read this page (e.g. the manufacturer's)")
+    s.add_argument("--confirm", action="store_true", help="the weight and size shown are right: keep them")
     s.set_defaults(func=cmd_specs)
 
     s = sub.add_parser("rules", help="tax and forwarder rules: show, check for updates, change")

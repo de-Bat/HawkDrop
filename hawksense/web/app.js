@@ -175,7 +175,7 @@ function viewList() {
         <div class="item-verdict">${verdict(it.advice, { compact: true })}</div>
       </div>
       <div class="item-side">
-        <div class="price">${best ? money(best.landed.total) : '–'}</div>
+        <div class="price">${best ? (best.landed.hold ? html`<span class="warn-text small">set weight</span>` : money(best.landed.total)) : '–'}</div>
         <div class="spark-wrap">${raw(sparkline(it.history))}</div>
       </div>
     </a>`;
@@ -234,6 +234,7 @@ function storeLabel(it, ref) {
 }
 
 function breakdown(l) {
+  if (l.hold) return html`<p class="small warn-text">⚠ ${l.hold[0].toUpperCase() + l.hold.slice(1)}</p>`;
   const lines = l.lines && l.lines.length
     ? l.lines.map(([label, v]) => html`<tr><td>${label[0].toUpperCase() + label.slice(1)}</td><td>${money(v)}</td></tr>`)
     : [html`<tr><td>Shipping${l.shipping_known ? '' : ' (unknown)'}</td><td>${l.shipping_known ? money(l.shipping) : '?'}</td></tr>`,
@@ -253,7 +254,7 @@ function otherRoutes(q) {
   const others = (q.routes || []).slice(1);
   if (!others.length) return '';
   return html`<details class="routes small"><summary>Other ways to get it (${others.length})</summary>
-    <ul class="plain">${others.map((r) => html`<li><details><summary class="row between"><span>${r.route === 'direct' ? 'Direct from the store' : r.route_label}</span><b>${money(r.total)}</b></summary>${breakdown(r)}</details></li>`)}</ul>
+    <ul class="plain">${others.map((r) => html`<li><details><summary class="row between"><span>${r.route === 'direct' ? 'Direct from the store' : r.route_label}</span><b>${r.hold ? 'on hold' : money(r.total)}</b></summary>${breakdown(r)}</details></li>`)}</ul>
   </details>`;
 }
 
@@ -267,7 +268,7 @@ function quotesSection(it) {
           <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}
             <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div>
             ${l.route && l.route !== 'direct' ? html`<div class="small via">${l.route_label}</div>` : ''}</div>
-          <div class="q-total">${money(l.total)}<div class="small muted">delivered</div></div>
+          <div class="q-total">${l.hold ? 'on hold' : money(l.total)}<div class="small muted">${l.hold ? 'set the weight' : 'delivered'}</div></div>
         </summary>
         ${breakdown(l)}
         ${otherRoutes(q)}
@@ -294,7 +295,8 @@ function quotesSection(it) {
 
 const SPEC_LABEL = {
   verified: 'verified by several store pages', unverified: 'from one store page, not verified',
-  conflict: 'store pages disagree', missing: 'not found on the store pages',
+  majority: 'most store pages agree', conflict: 'store pages split evenly - nothing used',
+  missing: 'not found on the store pages',
 };
 
 function specsCard(it) {
@@ -310,8 +312,11 @@ function specsCard(it) {
       <span class="muted">${o.weight_kg != null ? `${o.weight_kg} kg${o.weight_kind === 'package' ? ' boxed' : ''}` : 'no weight'}${o.dims ? ` · ${o.dims} cm` : ''}</span></li>`);
   return html`<section class="card specs ${sp.alert ? 'alert' : ''}">
     <div class="row between"><h3>${icon('box', 'icon inline')} Weight & size</h3><b>${size}</b></div>
-    <p class="small ${sp.alert ? 'warn-text' : 'muted'}">${manual ? 'Set by you.' : (sp.alert ? '⚠ ' : '') + (SPEC_LABEL[sp.status] || '')}${sp.alert ? ' Forwarder prices may be off - please set it yourself.' : ''}</p>
+    <p class="small ${sp.alert ? 'warn-text' : 'muted'}">${manual ? 'Set by you.' : (sp.alert ? '⚠ ' : '') + (SPEC_LABEL[sp.status] || '')}${sp.alert ? '. Forwarder prices are on hold until you set it.' : ''}</p>
     ${!manual && sp.messages && sp.messages.length ? html`<ul class="notes small muted">${sp.messages.map((m) => html`<li>${m}</li>`)}</ul>` : ''}
+    ${sp.confirm && sp.confirm.length ? html`<div class="confirm small"><p class="warn-text">? Please confirm - forwarder prices use these values:</p>
+      <ul class="notes">${sp.confirm.map((m) => html`<li>${m}</li>`)}</ul>
+      <button type="button" class="btn small" data-action="specs-confirm">Looks right</button></div>` : ''}
     ${obs.length ? html`<details class="small"><summary>What each page says (${obs.length})</summary><ul class="plain">${obs}</ul></details>` : ''}
     <div class="row gap small">
       <button type="button" class="link" data-action="edit-item">${manual ? 'Change' : 'Set it yourself'}</button>
@@ -955,6 +960,15 @@ async function onClick(ev) {
     case 'check': if (it) checkPrices(it); break;
     case 'add-forwarder': forwarderSheet(); break;
     case 'specs-source': if (it) specsSourceSheet(it); break;
+    case 'specs-confirm':
+      if (it) {
+        const body = {};
+        if (it.weight_kg != null) body.weight_kg = it.weight_kg;
+        if (it.dims) body.dims = it.dims;
+        await mutate({ type: 'update_item', itemId: it.id, body });
+        toast('Confirmed - these values are kept even if store pages change');
+      }
+      break;
     case 'mark-all-read': await mutate({ type: 'read_notifications', body: {} }); break;
     case 'test-channel':
       try { const r = await online('POST', 'api/notify/test', { channel: el.dataset.channel }); toast(`${el.dataset.channel}: ${r.result}`); } catch (e) { toast(`Test failed: ${e.message}`, { timeout: 7000 }); }

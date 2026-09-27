@@ -175,6 +175,23 @@ class EvaluateTest(unittest.TestCase):
         self.assertIn("specs_alert", self.events())
         alert = next(n for n in self.db.notifications() if n["event"] == "specs_alert")
         self.assertIn("couldn't find the weight", alert["title"])
+        self.assertIn("on hold", alert["body"])
+
+    def test_values_to_confirm_are_notified_once(self):
+        from hawksense.specs import Specs
+        self.t.add_offer(self.item, "https://ksp.co.il/x")
+        self.price(500)
+        self.t._save_specs(self.item, "Amazon", "https://www.amazon.com/a", Specs(1.0, None, "package"))
+        self.t._save_specs(self.item, "B&H", "https://www.bhphotovideo.com/b", Specs(1.1, None, "package"))
+        self.t._save_specs(self.item, "KSP", "https://ksp.co.il/x", None)
+        self.t.notifier.evaluate(self.t)
+        self.t.notifier.evaluate(self.t)
+        alerts = [n for n in self.db.notifications() if n["event"] == "specs_alert"]
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["title"], f"{self.item.name}: please confirm the weight and size")
+        self.assertIn("Amazon (1 kg boxed) and B&H (1.1 kg boxed) agree; KSP doesn't list a weight.",
+                      alerts[0]["body"])
+        self.assertIn("--confirm", alerts[0]["body"])
 
     def test_check_failed_after_three(self):
         offer = self.t.add_offer(self.item, "https://ksp.co.il/x")

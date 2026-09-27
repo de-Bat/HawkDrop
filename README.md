@@ -159,28 +159,41 @@ item's edit sheet.
 
 Forwarders charge by weight, so every `check` also reads the weight and size from each store
 page. It looks at structured product data, spec tables ("Item Weight", "Package Dimensions")
-and Hebrew spec lists ("משקל", "מידות"), in g/kg/lb/oz and cm/mm/inches. Then it compares the
-pages:
+and Hebrew spec lists ("משקל", "מידות"), in g/kg/lb/oz and cm/mm/inches. Then it groups the
+pages whose values agree (weights within 15%, box volumes within 30%):
 
 | Result | Meaning | What HawkSense does |
 |---|---|---|
-| verified | two or more pages agree (within 15%) | uses it |
+| verified | every page that lists it agrees | uses it |
 | unverified | only one page had it | uses it, marked as unverified |
-| conflict | pages disagree | uses the **larger** value, so shipping isn't underestimated, and **alerts you** |
-| missing | no page had it | uses a typical weight for the category and **alerts you** |
+| majority | one group of pages is bigger than the others | uses the bigger group's value and **asks you to confirm** |
+| conflict | the biggest groups are the same size (e.g. 1 page vs 1 page) | uses **nothing**, **alerts you**, and puts forwarder prices **on hold** |
+| missing | no page had a weight | uses **nothing**, **alerts you**, and puts forwarder prices **on hold** |
+
+A value that's used while other pages disagree or don't list it is flagged for you to confirm,
+with what each page said, for example:
+
+> Weight 1.025 kg: Amazon (1 kg boxed) and B&H (1.05 kg boxed) agree, but KSP (2.5 kg boxed)
+> differs; Bug doesn't list a weight.
+
+"On hold" means forwarder routes for that item get no price, aren't picked as the best
+option and send no price alerts until you set the weight and size. Buying directly from a
+store doesn't depend on the weight, so those prices keep working.
 
 Boxed (package/shipping) weights beat product weights. With only a product weight, ~10% plus
-0.1 kg is added for the box. A value you set yourself is never overwritten.
+0.1 kg is added for the box. A value you set or confirm yourself is never overwritten.
 
 ```bash
 hawksense specs "WH-1000XM5"                                   # what each page said, and the result
+hawksense specs "WH-1000XM5" --confirm                         # the values shown are right: keep them
 hawksense specs "WH-1000XM5" --source https://maker.example/wh-1000xm5   # cross-check another page
 hawksense track "WH-1000XM5" --weight 1.1 --dims 26x22x9       # set it yourself
 ```
 
-`check` prints a ⚠ line when the size is missing or disputed, and the `specs_alert`
-notification tells you too. In the web app, the item page has a **Weight & size** card
-showing what each page said.
+`check` prints a ⚠ line when the size is missing or split, and a ? line with what to confirm.
+The `specs_alert` notification tells you too, once per set of values. In the web app, the
+item page's **Weight & size** card shows what each page said, what to confirm (with a
+**Looks right** button), or why forwarder prices are on hold.
 
 ## Keeping taxes and forwarder rates current
 
@@ -239,7 +252,7 @@ Pick which events you want, and where each one goes:
 | `sale_soon` | a sales day for your items' stores starts within 3 days (`sale_soon_days`) |
 | `rules_changed` | taxes or forwarder rates were updated automatically |
 | `rules_review` | a fetched change looks odd and needs your OK |
-| `specs_alert` | an item's weight/size is missing or the store pages disagree |
+| `specs_alert` | an item's weight/size is missing, the store pages split evenly, or values need your confirmation |
 | `check_failed` | a store's price couldn't be read 3 times in a row (`check_failed_after`) |
 
 Set channels up in the app (**Settings → Notifications → Channels**, with a test button) or in

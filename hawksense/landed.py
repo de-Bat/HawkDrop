@@ -102,6 +102,7 @@ class LandedCost:
     route_label: str = "direct from the store"
     lines: list[tuple[str, float]] = field(default_factory=list)  # itemised shipping/fees for forwarded routes
     set_up: bool = True  # False for a forwarder you haven't registered with (a suggestion)
+    hold: str | None = None  # why this route has no usable price yet (e.g. the item's weight is unknown)
 
     @property
     def total(self) -> float:

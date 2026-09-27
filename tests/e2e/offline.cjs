@@ -173,7 +173,8 @@ async function api(method, path, body) {
   await page.locator('#status .pill').click();
   await page.locator('#bell .count').waitFor();
   await page.locator('#bell').click();
-  await page.getByText('Test notification').waitFor();
+  // the inbox entry itself: a "🔔 Test notification" toast may be on screen at the same time
+  await page.locator('.note-item').getByText('Test notification').waitFor();
   await shot('10-inbox');
   await page.waitForFunction(async () => (await (await fetch('api/notifications', { headers: { 'X-HawkSense-Token': localStorage.getItem('hawkdrop.token') || '' } })).json()).unread === 0, null, { timeout: 15000 });
   step('inbox: notification shown and marked read');

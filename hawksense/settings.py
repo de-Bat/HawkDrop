@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field, replace
 
 from hawksense.config import Config
+from hawksense.vault import Vault, VaultError, is_encrypted
 
 KV_KEY = "app_settings"
 
@@ -121,6 +122,7 @@ SECTIONS: tuple[Section, ...] = (
 )
 
 FIELDS: dict[str, Field] = {f.path: f for s in SECTIONS for f in s.fields}
+SECRET_PATHS = tuple(p for p, f in FIELDS.items() if f.kind == "secret")
 
 # per-store overrides (see hawksense.stores.with_overrides)
 STORE_FIELDS: dict[str, Field] = {f.path: f for f in (
@@ -138,7 +140,33 @@ SOURCE_KEYS = ("url", "target", "regex", "format", "scale")
 # ---- storage ----------------------------------------------------------------------------------
 
 def load(db) -> dict:
-    return json.loads(db.get_kv(KV_KEY) or "{}")
+    """The app's settings as stored: secrets stay encrypted (see ``decrypted``)."""
+    data = json.loads(db.get_kv(KV_KEY) or "{}")
+    plain = [p for p in SECRET_PATHS if _get(data, p) is not None and not is_encrypted(_get(data, p))]
+    if plain:  # saved by a version that didn't encrypt yet: encrypt them now
+        vault = Vault.for_db(db)
+        for path in plain:
+            _set(data, path, vault.encrypt(str(_get(data, path))))
+        _save(db, data)
+    return data
+
+
+def decrypted(db, data: dict) -> tuple[dict, list[str]]:
+    """A copy of ``data`` with secrets decrypted, and the paths that couldn't be (wrong key)."""
+    out = json.loads(json.dumps(data))
+    bad = []
+    vault = None
+    for path in SECRET_PATHS:
+        value = _get(out, path)
+        if value is None:
+            continue
+        vault = vault or Vault.for_db(db)
+        try:
+            _set(out, path, vault.decrypt(value))
+        except VaultError:
+            _set(out, path, None)
+            bad.append(path)
+    return out, bad
 
 
 def _save(db, data: dict):
@@ -179,7 +207,7 @@ def _merge(base: dict, over: dict) -> dict:
 
 def effective(db, file_cfg: Config) -> Config:
     """config.toml with the app's settings on top."""
-    ui = load(db)
+    ui, _ = decrypted(db, load(db))
     merged = {name: _merge(getattr(file_cfg, name) or {}, ui.get(name) or {})
               for name in ("destination", "advisor", "stores", "server", "forwarders", "ebay", "rules", "notify")}
     if str(merged["rules"].get("feed_url", "")).strip().lower() == "off":
@@ -275,7 +303,10 @@ def update(db, changes: dict, env: dict | None = None) -> list[str]:
             f = FIELDS[path]
             if f.env and env.get(f.env):
                 raise ValueError(f"{f.label} is set by the {f.env} environment variable on the server")
-            _set(data, path, _clean(f, value))
+            value = _clean(f, value)
+            if f.kind == "secret" and value is not None:
+                value = Vault.for_db(db).encrypt(value)  # never stored in the clear
+            _set(data, path, value)
         elif path.startswith("stores.") and path.count(".") == 2:
             from hawksense.stores import STORES
 
@@ -301,7 +332,8 @@ def update(db, changes: dict, env: dict | None = None) -> list[str]:
 def view(db, file_cfg: Config, env: dict | None = None, startup: dict | None = None) -> dict:
     """Every setting with its value and where it comes from; secrets only say whether they're set."""
     env = os.environ if env is None else env
-    ui = load(db)
+    stored = load(db)
+    ui, unreadable = decrypted(db, stored)
     file_tree = {name: getattr(file_cfg, name) or {} for name in
                  ("destination", "advisor", "stores", "forwarders", "ebay", "rules", "notify")}
     file_tree["schedule"] = startup or {}
@@ -325,6 +357,9 @@ def view(db, file_cfg: Config, env: dict | None = None, startup: dict | None = N
             if f.kind == "secret":
                 row["is_set"] = value not in (None, "")
                 row["value"] = None
+                if f.path in unreadable and not env_value:
+                    row["unreadable"] = True  # saved with another secret key: enter it again
+                    row["help"] = "Saved with a different secret key (e.g. restored from a backup) - enter it again."
             else:
                 row["value"] = value
             rows.append(row)

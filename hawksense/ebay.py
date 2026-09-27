@@ -35,6 +35,7 @@ from typing import Callable
 
 from hawksense.fetch import Extraction, FetchError, extract_price, fetch_html, guess_currency, parse_number
 from hawksense.specs import extract_specs, specs_from_pairs
+from hawksense.vault import Vault, VaultError
 
 API_ROOT = "https://api.ebay.com"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
@@ -144,8 +145,11 @@ class EbayApi:
 
     def _token(self) -> str:
         if self.db is not None and (cached := self.db.get_kv("ebay_token")):
-            data = json.loads(cached)
-            if datetime.fromisoformat(data["expires"]) > datetime.now(timezone.utc) + timedelta(minutes=2):
+            try:  # stored encrypted, like other secrets
+                data = json.loads(Vault.for_db(self.db).decrypt(cached))
+            except (VaultError, ValueError):
+                data = None  # from an older version or another key: just get a new one
+            if data and datetime.fromisoformat(data["expires"]) > datetime.now(timezone.utc) + timedelta(minutes=2):
                 return data["token"]
         basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
         body = urllib.parse.urlencode({"grant_type": "client_credentials", "scope": SCOPE}).encode()
@@ -157,7 +161,8 @@ class EbayApi:
             raise EbayError("eBay API: no access token (check client_id / client_secret)")
         expires = datetime.now(timezone.utc) + timedelta(seconds=int(res.get("expires_in", 7200)))
         if self.db is not None:
-            self.db.set_kv("ebay_token", json.dumps({"token": token, "expires": expires.isoformat()}))
+            self.db.set_kv("ebay_token", Vault.for_db(self.db).encrypt(
+                json.dumps({"token": token, "expires": expires.isoformat()})))
         return token
 
     def _get(self, path: str, params: dict, marketplace: str) -> dict:

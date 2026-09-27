@@ -9,3 +9,4 @@ dist/
 secrets/
 *.db-wal
 *.db-shm
+secret.key

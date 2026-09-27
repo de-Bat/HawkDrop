@@ -378,6 +378,7 @@ Useful commands:
 docker compose logs -f hawksense                          # logs (incl. scheduled checks)
 docker compose exec hawksense hawksense check              # fetch prices now
 docker compose exec hawksense hawksense backup /data/backups   # consistent backup, safe while running
+                                                          # (also keep /data/secret.key, see Security notes)
 docker compose pull && docker compose up -d --build      # update
 ```
 
@@ -455,6 +456,20 @@ Security notes:
 - Pages are sent with a strict Content-Security-Policy and `Referrer-Policy: no-referrer`,
   so the token in the app URL never leaks to store sites.
 - The server logs a warning if it is reachable from the network without a token.
+- **Outbound fetches are limited to the public internet.** Product links, spec pages, rule
+  sources and the rules feed can only be `http`/`https` addresses. Anything that points to
+  your own network, the machine itself or a cloud metadata service (127.0.0.1, 192.168.x,
+  10.x, 169.254.169.254, ...) is refused. This is checked before connecting, on every
+  redirect, and against the address actually connected to. Downloads stop at 8 MB. To track
+  a shop on your own network, set `HAWKSENSE_ALLOW_PRIVATE_FETCH=1`. Notification webhooks
+  and a self-hosted ntfy may point at your network on purpose, so they're not limited.
+- **Passwords, tokens and API keys saved in the app are encrypted** in the database, with a
+  key kept outside it: `secret.key` next to the database (created on first use, readable only
+  by its owner). You can supply the key yourself with `HAWKSENSE_SECRET_KEY` or
+  `HAWKSENSE_SECRET_KEY_FILE` (e.g. a Docker secret). A copied database or a `hawksense backup`
+  file doesn't reveal them. Keep a copy of the key with your backups, or enter the secrets
+  again after a restore; the app marks any it can't decrypt. Secrets in `config.toml` or
+  environment variables are yours to protect, e.g. with `chmod 600` or Docker secrets.
 
 ## How the advice works
 
@@ -566,6 +581,15 @@ Exchange rates come from the ECB via frankfurter.app and are cached for 12 hours
 offline, HawkSense falls back to built-in approximate rates.
 
 ## Development
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every pull
+request and every push to `main`:
+
+- the unit and API tests on Python 3.11, 3.12 and 3.13
+- a package install and a CLI smoke test
+- the browser test in Chromium; screenshots and the server log are kept if it fails
+
+To run them locally:
 
 ```bash
 python -m unittest discover -s tests          # unit + API tests

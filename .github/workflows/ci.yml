@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile
+        run: python -m compileall -q hawksense
+      - name: Unit and API tests
+        run: python -m unittest discover -s tests -v
+      - name: Package installs and the CLI runs
+        run: |
+          pip install .
+          export HAWKSENSE_HOME="$(mktemp -d)"
+          hawksense --offline demo
+
+  e2e:
+    name: Browser test (offline mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Start HawkSense
+        run: |
+          export HAWKSENSE_HOME="$(mktemp -d)"
+          printf '[rules]\nfeed_url = ""\n' > "$HAWKSENSE_HOME/config.toml"
+          python -m hawksense --offline serve --port 8799 > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8799/api/health && exit 0
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - name: Run the browser test
+        run: |
+          mkdir -p shots
+          SHOTS_DIR=shots HAWKSENSE_URL=http://localhost:8799 node tests/e2e/offline.cjs
+      - name: Keep screenshots and server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure
+          path: |
+            shots/
+            server.log

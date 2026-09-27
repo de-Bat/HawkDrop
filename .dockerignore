@@ -13,3 +13,4 @@ scripts/
 deploy/
 assets/
 rules/
+secret.key

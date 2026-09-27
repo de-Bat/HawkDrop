@@ -12,6 +12,7 @@ from hawksense.fetch import Extraction, FetchError
 from hawksense.landed import DESTINATIONS
 from hawksense.stores import resolve_store
 from hawksense.tracker import Tracker
+from hawksense.vault import Vault
 from tests.test_landed import StubFX
 
 ITEM = {
@@ -99,7 +100,9 @@ class ApiTest(unittest.TestCase):
             EbayApi("id", "secret", db, http=http).item("1")
             EbayApi("id", "secret", db, http=http).item("1")
             self.assertEqual(sum("oauth2/token" in c[1] for c in http.calls), 1)
-            self.assertEqual(json.loads(db.get_kv("ebay_token"))["token"], "T")
+            stored = db.get_kv("ebay_token")
+            self.assertNotIn('"T"', stored)  # encrypted at rest
+            self.assertEqual(json.loads(Vault.for_db(db).decrypt(stored))["token"], "T")
             db.close()
 
     def test_search_picks_cheapest_delivered_with_known_shipping(self):

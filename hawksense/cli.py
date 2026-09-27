@@ -694,6 +694,11 @@ def cmd_backup(t: Tracker, a):
         target = target / f"hawksense-{date.today().isoformat()}.db"
     t.db.backup(target)
     print(f"Backed up {len(t.db.list_items())} items to {target}")
+    if not (os.environ.get("HAWKSENSE_SECRET_KEY") or os.environ.get("HAWKSENSE_SECRET_KEY_FILE")):
+        key = Path(t.db.path).resolve().parent / "secret.key"
+        if key.exists():
+            print(f"Passwords and keys saved in the app are encrypted with {key} - keep a copy of it too,\n"
+                  "or enter them again after restoring.")
 
 
 def cmd_demo(t: Tracker, a):

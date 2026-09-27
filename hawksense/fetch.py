@@ -13,13 +13,12 @@ Sites that block bots can always be tracked with manual price entries.
 
 from __future__ import annotations
 
-import gzip
 import html as html_lib
 import json
 import re
-import urllib.request
-import zlib
 from dataclasses import dataclass
+
+from hawksense import netguard
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -46,23 +45,19 @@ class Extraction:
 
 
 def fetch_html(url: str, timeout: float = 20.0) -> str:
-    req = urllib.request.Request(url, headers={
+    """Fetch a page from the public internet (see ``hawksense.netguard`` for what's refused)."""
+    headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate",
-    })
+    }
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            encoding = (resp.headers.get("Content-Encoding") or "").lower()
-            charset = resp.headers.get_content_charset() or "utf-8"
+        raw, charset = netguard.fetch(url, headers, timeout)
+    except netguard.BlockedAddress as exc:
+        raise FetchError(f"won't fetch {url}: {exc}") from None
     except Exception as exc:  # urllib raises many types; surface one
         raise FetchError(f"could not fetch {url}: {exc}") from exc
-    if encoding == "gzip":
-        raw = gzip.decompress(raw)
-    elif encoding == "deflate":
-        raw = zlib.decompress(raw, -zlib.MAX_WBITS)
     return raw.decode(charset, errors="replace")
 
 

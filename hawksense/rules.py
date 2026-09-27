@@ -38,10 +38,10 @@ from __future__ import annotations
 import json
 import re
 import statistics
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
+from hawksense import netguard
 from hawksense.fetch import FetchError, fetch_html, parse_number
 from hawksense.forwarders import FORWARDERS, Forwarder, forwarders_from_config
 from hawksense.landed import DESTINATIONS, Destination, destination_from_config
@@ -259,10 +259,9 @@ class Report:
 
 
 def _fetch_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "HawkSense rules check", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as res:
-            return json.load(res)
+        raw, charset = netguard.fetch(url, {"User-Agent": "HawkSense rules check", "Accept": "application/json"})
+        return json.loads(raw.decode(charset))
     except Exception as exc:
         raise FetchError(f"rules feed {url}: {exc}") from None
 

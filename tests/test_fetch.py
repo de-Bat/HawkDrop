@@ -45,6 +45,26 @@ class ExtractTest(unittest.TestCase):
     def test_captcha_page(self):
         with self.assertRaises(FetchError):
             extract_price("<html>Enter the characters - Robot Check</html>")
+        with self.assertRaisesRegex(FetchError, "captcha"):
+            extract_price("<html><head><title>Just a moment...</title></head>" + " " * 30000 + "</html>")
+
+    def test_product_page_with_a_captcha_script_is_not_a_block(self):
+        page = "<html><head><title>Grill</title></head>" + " " * 30000 + '<style>.grecaptcha-badge{}</style></html>'
+        with self.assertRaisesRegex(FetchError, "no price found"):
+            extract_price(page)
+
+    def test_entity_encoded_json_ld_type(self):  # as on zap.co.il
+        page = ('<script type="application/ld&#x2B;json">{"@type": "Product", "name": "Ninja AG653", "offers": '
+                '{"@type": "AggregateOffer", "offerCount": "49", "lowPrice": "1019.00", "highPrice": "1845.00", '
+                '"priceCurrency": "ILS"}}</script>')
+        ex = extract_price(page, "https://www.zap.co.il/model.aspx?modelid=1164619")
+        self.assertEqual((ex.price, ex.currency, ex.title), (1019.0, "ILS", "Ninja AG653"))
+
+    def test_newegg_buy_box(self):
+        page = ('<div class="price-current_2026"><span class="price-current-label"></span>$<strong>1,220</strong>'
+                '<sup>.50</sup></div><div class="price-was"><span class="price-was-data">$279.00</span></div>')
+        ex = extract_price(page, "https://www.newegg.com/p/N82E16819113844")
+        self.assertEqual((ex.price, ex.currency, ex.method), (1220.5, "USD", "newegg-pattern"))
 
 
 if __name__ == "__main__":

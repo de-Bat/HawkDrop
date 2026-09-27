@@ -145,6 +145,7 @@ def _side_cm(node) -> float:
 def _apply_label(specs: Specs, label: str, value: str) -> None:
     hint = re.search(r"\(([^)]*)\)", label)  # "Weight (kg)": 1.2
     label = re.sub(r"\s+", " ", re.sub(r"\([^)]*\)|[:\u200e\u200f]", " ", label)).strip().lower()
+    label = re.sub(r"\s+(?:כ-?|בערך|approx\.?|approximately)$", "", label)  # "מידות כ-" (approx.)
     if hint and not re.search(r"[a-z\u0590-\u05ff\"]", value, re.I):
         value = f"{value} {hint.group(1)}"
     for pattern, kind in _DIMS_LABELS:
@@ -245,12 +246,30 @@ def specs_from_pairs(pairs: list[tuple[str, str]], method: str = "attributes") -
     return specs
 
 
+# Newegg's page data: the item's shipping box, in pounds and inches (the item comes first)
+_NEWEGG_BOX = re.compile(r'"Weight":(\d{1,4}(?:\.\d+)?),"Length":(\d{1,4}(?:\.\d+)?),"Width":(\d{1,4}(?:\.\d+)?),'
+                         r'"Height":(\d{1,4}(?:\.\d+)?),"ShippingCharge"')
+
+
+def _from_store_data(page: str) -> Specs:
+    specs = Specs(method="store-data")
+    if m := _NEWEGG_BOX.search(page):
+        weight = parse_weight(f"{m.group(1)} lb")
+        dims = parse_dimensions(f"{m.group(2)} x {m.group(3)} x {m.group(4)} in")
+        if weight:
+            specs.weight_kg, specs.weight_kind = weight, "package"
+        if dims:
+            specs.dims_cm, specs.dims_kind = dims, "package"
+    return specs
+
+
 def extract_specs(page: str) -> Specs:
     """Weight and size found on a product page (empty ``Specs`` if none)."""
     ld = _from_json_ld(page)
     table = _from_tables(page)
-    out = Specs(method="+".join(m for m, s in (("json-ld", ld), ("spec-table", table)) if s))
-    for src in (ld, table):  # structured data first; package values beat item values
+    store = _from_store_data(page)
+    out = Specs(method="+".join(m for m, s in (("json-ld", ld), ("spec-table", table), ("store-data", store)) if s))
+    for src in (ld, table, store):  # structured data first; package values beat item values
         if src.weight_kg is not None and (out.weight_kg is None or
                                           (src.weight_kind == "package" and out.weight_kind != "package")):
             out.weight_kg, out.weight_kind = src.weight_kg, src.weight_kind

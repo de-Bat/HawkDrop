@@ -64,6 +64,24 @@ def obs(source, w=None, d=None, wk="package", dk="package"):
     return Observation(source, f"https://{source}", w, d, wk, dk)
 
 
+class LiveLayoutTest(unittest.TestCase):
+    """Layouts seen on the stores' real pages."""
+
+    def test_ivory_spec_rows(self):
+        page = ('<li class="col-md-12 col-12"><div style="width:40%"><b>מידות כ-</b></div>'
+                '<div dir="rtl">מידות מוצר 175.2x54.8x62 מ"מ (ללא בסיס)<br>מידות בסיס 95x95x8.5 מ"מ<br>'
+                'משקל 225 גרם</div></li>')
+        specs = extract_specs(page)
+        self.assertEqual((specs.weight_kg, specs.dims_cm), (0.225, (17.5, 5.5, 6.2)))
+
+    def test_newegg_shipping_box(self):
+        page = ('<script>window.__initialState__ = {"AllSellerList":[{"Item":"19-113-844","UnitCost":279,'
+                '"Weight":0.2,"Length":4.9,"Width":4.9,"Height":1.4,"ShippingCharge":0.01}]}</script>')
+        specs = extract_specs(page)
+        self.assertEqual((specs.weight_kg, specs.weight_kind), (0.091, "package"))
+        self.assertEqual(specs.dims_cm, (12.4, 12.4, 3.6))
+
+
 class ConsensusTest(unittest.TestCase):
     def test_verified_when_sources_agree(self):
         c = consensus([obs("a", 1.0, (30, 20, 10)), obs("b", 1.1, (30, 21, 10))])

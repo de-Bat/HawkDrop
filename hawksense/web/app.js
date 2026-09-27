@@ -272,7 +272,7 @@ function quotesSection(it) {
         ${breakdown(l)}
         ${otherRoutes(q)}
         <div class="row gap small">
-          ${q.url ? html`<a href="${q.url}" target="_blank" rel="noopener">Open store page</a>` : ''}
+          ${/^https?:\/\//i.test(q.url || '') ? html`<a href="${q.url}" target="_blank" rel="noopener noreferrer">Open store page</a>` : ''}
           <button type="button" class="link danger" data-action="remove-offer" data-offer="${q.offer_id}">Stop tracking this store</button>
         </div>
       </details>

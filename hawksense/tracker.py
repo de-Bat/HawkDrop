@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields
+from urllib.parse import urlparse
 from datetime import date, datetime, timedelta, timezone
 
 from hawksense.currency import FX
@@ -16,7 +18,27 @@ from hawksense.notify import Notifier
 from hawksense.specs import Consensus, Observation, consensus, extract_specs
 from hawksense.stores import StoreProfile, resolve_store, with_overrides
 
-STALE_AFTER_DAYS = 14  # a store's last price is trusted this long when building the daily series
+STALE_AFTER_DAYS = 14
+
+_BARE_DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(/|$)", re.I)
+
+
+def clean_offer_ref(ref: str) -> str:
+    """A product link (http/https only) or a store key/name; raises ValueError for anything else.
+
+    Links are shown as clickable in the app, so ``javascript:``, ``data:`` and similar are refused.
+    """
+    ref = (ref or "").strip()
+    if not ref or len(ref) > 2000 or any(ord(c) < 32 for c in ref):
+        raise ValueError("enter a product link (https://...) or a store name")
+    parsed = urlparse(ref)
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        return ref
+    if _BARE_DOMAIN.match(ref):  # "shop.co.il/item/1" -> https://shop.co.il/item/1
+        return "https://" + ref
+    if parsed.scheme or ref.startswith("//") or "/" in ref or ":" in ref:
+        raise ValueError("product links must start with http:// or https://")
+    return ref  # a store key ("ksp") or a name for prices logged by hand  # a store's last price is trusted this long when building the daily series
 
 
 @dataclass
@@ -86,7 +108,8 @@ class Tracker:
     def add_offer(self, item: Item, url_or_store: str, shipping: float | None = None,
                   shipping_currency: str | None = None, price_regex: str | None = None,
                   local_shipping: float | None = None) -> Offer:
-        is_url = "://" in url_or_store or "/" in url_or_store
+        url_or_store = clean_offer_ref(url_or_store)
+        is_url = "://" in url_or_store
         store = resolve_store(url_or_store)
         return self.db.add_offer(item, store.key, url_or_store if is_url else "", shipping,
                                  shipping_currency, price_regex, local_shipping)
@@ -198,6 +221,7 @@ class Tracker:
     def record_price(self, item: Item, url_or_store: str, price: float, currency: str | None = None,
                      shipping: float | None = None, in_stock: bool = True, when: date | None = None,
                      client_id: str | None = None) -> Offer:
+        url_or_store = clean_offer_ref(url_or_store)
         store = resolve_store(url_or_store)
         offer = self.db.find_offer(item, store.key) or self.add_offer(item, url_or_store)
         ts = datetime.combine(when, datetime.min.time(), timezone.utc) + timedelta(hours=12) if when else None

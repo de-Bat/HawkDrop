@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -155,6 +156,15 @@ class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if str(self.path) != ":memory:":
+            # your items, addresses and settings: readable by you only (-wal/-shm inherit this mode)
+            if not self.path.exists():
+                os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600))
+            elif self.path.stat().st_mode & 0o077:
+                try:
+                    os.chmod(self.path, 0o600)  # created by an older version
+                except OSError:
+                    pass
         self.conn = sqlite3.connect(self.path, timeout=15)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
@@ -198,6 +208,7 @@ class Database:
         target = Path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
+        os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
         dst = sqlite3.connect(tmp)
         try:
             self.conn.backup(dst)

@@ -7,8 +7,10 @@ threaded server is safe. Run with ``hawksense serve``.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import mimetypes
+import os
 import re
 import signal
 import socket
@@ -16,7 +18,7 @@ import ssl
 import threading
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +54,31 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "frame-ancestors 'none'; form-action 'self'")
 
 
+_TOKEN_IN_URL = re.compile(r"(token=)[^&\s\"]+", re.I)
+MAX_FAILURES, FAILURE_WINDOW = 20, 60.0  # wrong tokens per client per minute before it's told to wait
+LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home", ".home.arpa", ".internal")
+
+
+def host_allowed(host_header: str, extra: tuple[str, ...] = ()) -> bool:
+    """Host names a token-less server answers to: IP addresses, localhost, local network names, and ``extra``.
+
+    A DNS-rebinding page always arrives with its own public domain in the Host header.
+    """
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        name = host[1:host.find("]")] if "]" in host else ""
+    else:
+        name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    if not name:
+        return False
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    return name == "localhost" or "." not in name or name.endswith(LOCAL_SUFFIXES) or name in extra
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -68,6 +95,25 @@ class ServerContext:
     base_path: str = ""  # e.g. "/hawksense" when a reverse proxy forwards the prefix unchanged
     check_every: float | None = None  # startup defaults; the app's settings override them
     rules_every: float | None = 7.0
+    allowed_hosts: tuple[str, ...] = ()  # extra host names for a token-less server (HAWKSENSE_ALLOWED_HOSTS)
+    _failures: dict = field(default_factory=dict, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self):
+        env = tuple(h.strip().lower() for h in os.environ.get("HAWKSENSE_ALLOWED_HOSTS", "").split(",") if h.strip())
+        self.allowed_hosts = tuple(h.lower() for h in self.allowed_hosts) + env
+
+    def record_failure(self, client: str):
+        with self._lock:
+            now = time.monotonic()
+            self._failures[client] = [t for t in self._failures.get(client, []) if now - t < FAILURE_WINDOW] + [now]
+
+    def too_many_failures(self, client: str) -> bool:
+        with self._lock:
+            now = time.monotonic()
+            recent = [t for t in self._failures.get(client, []) if now - t < FAILURE_WINDOW]
+            self._failures[client] = recent
+            return len(recent) >= MAX_FAILURES
 
     def tracker(self) -> Tracker:
         db = Database(self.db_path)
@@ -170,7 +216,10 @@ class Api:
             item = t.db.add_item(name, category, target)
         for url in body.get("urls") or []:
             if isinstance(url, str) and url.strip():
-                t.add_offer(item, url.strip())
+                try:
+                    t.add_offer(item, url.strip())
+                except ValueError as exc:
+                    raise ApiError(400, f"{url.strip()[:80]}: {exc}") from None
         if body.get("check") and body.get("urls"):
             t.check(item)
         return api.item_detail(t, t.db.get_item(item.id))
@@ -204,8 +253,11 @@ class Api:
     @route("POST", r"/api/items/(\d+)/offers")
     def add_offer(t, body, query, item_id):
         item = _item(t, item_id)
-        t.add_offer(item, _str(body, "url", required=True), _num(body, "shipping"),
-                    _str(body, "shipping_currency"), _str(body, "regex"), _num(body, "local_shipping"))
+        try:
+            t.add_offer(item, _str(body, "url", required=True), _num(body, "shipping"),
+                        _str(body, "shipping_currency"), _str(body, "regex"), _num(body, "local_shipping"))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
         return api.item_detail(t, item)
 
     @staticmethod
@@ -224,9 +276,12 @@ class Api:
             when_d = date.fromisoformat(when[:10]) if when else None
         except ValueError:
             raise ApiError(400, "'date' must be YYYY-MM-DD") from None
-        t.record_price(item, _str(body, "store", required=True), _num(body, "price", required=True),
-                       _str(body, "currency"), _num(body, "shipping"), body.get("in_stock", True) is not False,
-                       when_d, _str(body, "client_id"))
+        try:
+            t.record_price(item, _str(body, "store", required=True), _num(body, "price", required=True),
+                           _str(body, "currency"), _num(body, "shipping"), body.get("in_stock", True) is not False,
+                           when_d, _str(body, "client_id"))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
         t.notifier.evaluate(t, [item])
         return api.item_detail(t, item)
 
@@ -379,8 +434,8 @@ class Handler(BaseHTTPRequestHandler):
     quiet = False
 
     def log_message(self, fmt, *args):
-        if not self.quiet:
-            super().log_message(fmt, *args)
+        if not self.quiet:  # the app URL can carry ?token=...: never write it to the log
+            super().log_message("%s", _TOKEN_IN_URL.sub(r"\1[redacted]", fmt % args))
 
     def do_GET(self):
         self._dispatch("GET")
@@ -428,6 +483,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, b"not found", "text/plain")
             url = url._replace(path=url.path[len(base):])
         if url.path.startswith("/api/"):
+            if not self.ctx.token and not host_allowed(self.headers.get("Host", ""), self.ctx.allowed_hosts):
+                # a web page can point its own domain at 127.0.0.1 (DNS rebinding) and read a token-less API
+                return self._json(403, {"error": "unknown host name - add it to HAWKSENSE_ALLOWED_HOSTS "
+                                                 "or protect the server with an access token"})
             self._api(method, url)
         elif method == "GET":
             self._static(url.path, parse_qs(url.query))
@@ -442,10 +501,33 @@ class Handler(BaseHTTPRequestHandler):
                  or query.get("token", [""])[0])
         return hmac.compare_digest(given.encode(), token.encode())
 
+    def _cross_site(self) -> bool:
+        """True when a browser tells us another site sent this request."""
+        site = self.headers.get("Sec-Fetch-Site")
+        if site:
+            return site not in ("same-origin", "none")
+        origin = self.headers.get("Origin")
+        if not origin:
+            return False  # not from a browser page (curl, scripts, the CLI)
+        hosts = {h.strip().lower() for h in (self.headers.get("Host", ""), self.headers.get("X-Forwarded-Host", ""))}
+        return origin == "null" or urlparse(origin).netloc.lower() not in hosts
+
     def _api(self, method: str, url):
         query = parse_qs(url.query)
+        client = self.client_address[0]
+        if self.ctx.too_many_failures(client):
+            return self._json(429, {"error": "too many wrong tokens - try again in a minute"})
         if not self._authorized(url.path, query):
+            self.ctx.record_failure(client)
             return self._json(401, {"error": "invalid or missing token"})
+        if method != "GET":
+            # a page on another site can send a "simple" POST (text/plain, forms) without asking;
+            # it can't send JSON or custom headers without the server's consent, which it never gets
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return self._json(415, {"error": "send JSON (Content-Type: application/json)"})
+            if self._cross_site():
+                return self._json(403, {"error": "cross-site request refused"})
         for m, pattern, name in ROUTES:
             match = pattern.match(url.path)
             if m == method and match:
@@ -471,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(exc.status, {"error": str(exc)})
         except Exception as exc:  # keep the server alive, report the error
             traceback.print_exc()
-            self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+            self._json(500, {"error": "internal error - details are in the server log"})
         finally:
             t.db.close()
 

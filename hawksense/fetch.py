@@ -17,6 +17,7 @@ import html as html_lib
 import json
 import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from hawksense import netguard
 
@@ -93,7 +94,21 @@ def guess_currency(text: str) -> str | None:
 
 # ---- JSON-LD -----------------------------------------------------------------
 
-_LD_RE = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
+# Pages come from anywhere, so parsing must stay linear in the page size: no ".*?" scans from
+# every opening tag (a hostile page with thousands of unclosed tags would take hours).
+_LD_OPEN = re.compile(r'<script\b[^>]{0,300}?type=["\']application/ld\+json["\'][^>]{0,300}>', re.I)
+
+
+def ld_json_blocks(page: str):
+    """The contents of each <script type="application/ld+json"> block."""
+    lower = page.lower()
+    pos = 0
+    while m := _LD_OPEN.search(page, pos):
+        end = lower.find("</script", m.end())
+        if end < 0:
+            return  # unclosed: nothing after it can be closed either
+        yield page[m.end():end]
+        pos = end
 
 
 def _walk(node):
@@ -137,7 +152,7 @@ def _from_offer(offer: dict) -> Extraction | None:
 
 
 def extract_json_ld(page: str) -> Extraction | None:
-    for block in _LD_RE.findall(page):
+    for block in ld_json_blocks(page):
         try:
             data = json.loads(html_lib.unescape(block.strip()))
         except json.JSONDecodeError:
@@ -184,26 +199,33 @@ def extract_meta(page: str) -> Extraction | None:
 
 # ---- store specific ------------------------------------------------------------
 
+# host part -> [(marker, pattern matched within STORE_WINDOW characters after the marker)]
 _STORE_PATTERNS = {
-    "amazon": [
-        r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)</span>',
-        r'<span class="a-price[^"]*"[^>]*><span class="a-offscreen">([^<]+)</span>',
+    "amazon.": [
+        ('id="corePrice', r'<span class="a-offscreen">([^<]{1,40})</span>'),
+        ('<span class="a-price', r'^[^"]{0,200}"[^>]{0,300}><span class="a-offscreen">([^<]{1,40})</span>'),
     ],
     "ebay.": [
-        r'<div class="x-price-primary"[^>]*>.*?<span class="ux-textspans">([^<]+)</span>',
-        r'<span[^>]+itemprop="price"[^>]*>([^<]+)</span>',
+        ('<div class="x-price-primary"', r'<span class="ux-textspans">([^<]{1,40})</span>'),
+        ('itemprop="price"', r'^[^>]{0,300}>([^<]{1,40})</span>'),
     ],
 }
+STORE_WINDOW = 5000
 
 
 def extract_store_specific(page: str, url: str) -> Extraction | None:
-    for key, patterns in _STORE_PATTERNS.items():
-        if key not in url:
+    host = (urlparse(url).hostname or "").lower()
+    for key, rules in _STORE_PATTERNS.items():
+        if key not in host:
             continue
-        for pattern in patterns:
-            m = re.search(pattern, page, re.S)
-            if m and (value := parse_number(m.group(1))):
-                return Extraction(value, guess_currency(m.group(1)), method=f"{key}-pattern")
+        for marker, pattern in rules:
+            i, tries = page.find(marker), 0
+            while i >= 0 and tries < 20:  # the first few occurrences are enough
+                start = i + len(marker)
+                m = re.search(pattern, page[start:start + STORE_WINDOW], re.S)
+                if m and (value := parse_number(m.group(1))):
+                    return Extraction(value, guess_currency(m.group(1)), method=f"{key.rstrip('.')}-pattern")
+                i, tries = page.find(marker, start), tries + 1
     return None
 
 

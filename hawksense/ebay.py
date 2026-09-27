@@ -208,7 +208,8 @@ def _cheapest(found: list[Extraction], query: str) -> Extraction:
 
 # ---- public pages ------------------------------------------------------------------------
 
-_ITEM_RE = re.compile(r'<li[^>]+class="[^"]*s-(?:item|card)\b.*?</li>', re.S)
+_ITEM_OPEN = re.compile(r'<li\b[^>]{0,500}?class="[^"]{0,300}?s-(?:item|card)\b', re.I)
+ITEM_MAX = 50_000  # one result card; bounds the per-card patterns on hostile pages
 _LINK_RE = re.compile(r'href="(https://www\.ebay\.[^"]+/itm/[^"]+)"')
 _PRICE_RE = re.compile(r'class="[^"]*s-(?:item|card)__price[^"]*"[^>]*>(.*?)</span>', re.S)
 _SHIP_RE = re.compile(r'class="[^"]*s-(?:item__shipping|item__logisticsCost|card__shipping)[^"]*"[^>]*>(.*?)</span>',
@@ -221,10 +222,21 @@ def _text(fragment: str) -> str:
     return html_lib.unescape(_TAGS_RE.sub(" ", fragment)).strip()
 
 
+def _result_cards(page: str):
+    """Each search result <li> (up to its first </li>), found in linear time."""
+    lower, pos = page.lower(), 0
+    while m := _ITEM_OPEN.search(page, pos):
+        end = lower.find("</li>", m.end())
+        if end < 0:
+            return
+        yield page[m.start():min(end, m.start() + ITEM_MAX)]
+        pos = end + 5
+
+
 def parse_search_page(page: str, currency: str | None = None) -> Extraction:
     """Cheapest listing on an eBay search results page (best effort: eBay changes its markup)."""
     found = []
-    for block in _ITEM_RE.findall(page):
+    for block in _result_cards(page):
         link, price = _LINK_RE.search(block), _PRICE_RE.search(block)
         if not link or not price:
             continue

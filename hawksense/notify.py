@@ -97,8 +97,8 @@ def _urllib_http(method: str, url: str, headers: dict, body: bytes | None) -> No
         with urllib.request.urlopen(req, timeout=20) as res:
             res.read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read()[:200].decode(errors="replace")
-        raise NotifyError(f"HTTP {exc.code}: {detail or exc.reason}") from None
+        # status only: echoing the response body would let the test button read other services
+        raise NotifyError(f"HTTP {exc.code} {exc.reason}") from None
     except Exception as exc:
         raise NotifyError(str(exc)) from None
 
@@ -158,7 +158,7 @@ class Email(Channel):
         port = int(c.get("port", 587))
         use_ssl = str(c.get("ssl", port == 465)).lower() in ("true", "1", "yes")
         em = EmailMessage()
-        em["Subject"] = f"HawkSense: {msg.title}"
+        em["Subject"] = " ".join(f"HawkSense: {msg.title}".split())  # item names can't add header lines
         em["From"] = c.get("sender") or c.get("username") or "hawksense@localhost"
         em["To"] = c["to"] if isinstance(c["to"], str) else ", ".join(c["to"])
         em.set_content("\n\n".join(x for x in (msg.body, msg.url) if x) or msg.title)
@@ -171,7 +171,7 @@ class Email(Channel):
                 if c.get("username"):
                     smtp.login(c["username"], c.get("password", ""))
                 smtp.send_message(em)
-        except (smtplib.SMTPException, OSError) as exc:
+        except (smtplib.SMTPException, OSError, ValueError) as exc:
             raise NotifyError(f"email: {exc}") from None
 
 

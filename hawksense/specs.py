@@ -108,10 +108,10 @@ def _unit_value(node) -> str:
 
 
 def _from_json_ld(page: str) -> Specs:
-    from hawksense.fetch import _LD_RE, _is_type, _walk  # shared JSON-LD helpers
+    from hawksense.fetch import _is_type, _walk, ld_json_blocks  # shared JSON-LD helpers
 
     specs = Specs(method="json-ld")
-    for block in _LD_RE.findall(page):
+    for block in ld_json_blocks(page):
         try:
             data = json.loads(html_lib.unescape(block.strip()))
         except json.JSONDecodeError:
@@ -167,9 +167,13 @@ def _apply_label(specs: Specs, label: str, value: str) -> None:
             return
 
 
-_STRIP_RE = re.compile(r"<(script|style|noscript)\b.*?</\1>", re.S | re.I)
-_ROW_RE = re.compile(r"<(tr|li|div|p)\b[^>]*>(.*?)</\1>", re.S | re.I)
-_DL_RE = re.compile(r"<dt\b[^>]*>(.*?)</dt>\s*<dd\b[^>]*>(.*?)</dd>", re.S | re.I)
+# Linear-time scanning (pages come from anywhere): each opening tag only looks a bounded
+# distance ahead for its closing tag, instead of a ".*?" that can run to the end of the page.
+_BLOCK_OPEN = re.compile(r"<(script|style|noscript)\b", re.I)
+_ROW_OPEN = re.compile(r"<(tr|li|div|p)\b[^>]{0,500}>", re.I)
+_DT_OPEN = re.compile(r"<dt\b[^>]{0,200}>", re.I)
+_DD_OPEN = re.compile(r"\s{0,50}<dd\b[^>]{0,200}>", re.I)
+ROW_MAX = 600  # longer "rows" are layout, not a spec line
 _CELL_SPLIT = re.compile(r"</(?:th|td|dt|dd|span|b|strong|label)>", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -178,13 +182,48 @@ def _text(fragment: str) -> str:
     return re.sub(r"\s+", " ", html_lib.unescape(_TAG_RE.sub(" ", fragment))).replace("‎", "").strip()
 
 
+def _strip_blocks(page: str) -> str:
+    """Drop <script>, <style> and <noscript> blocks."""
+    lower, out, pos = page.lower(), [], 0
+    while m := _BLOCK_OPEN.search(lower, pos):
+        out.append(page[pos:m.start()])
+        end = lower.find(f"</{m.group(1)}", m.end())
+        if end < 0:
+            return " ".join(out)  # unclosed: the rest is script
+        close = lower.find(">", end)
+        pos = close + 1 if close >= 0 else len(page)
+    out.append(page[pos:])
+    return " ".join(out)
+
+
+def _dl_pairs(body: str, lower: str):
+    for m in _DT_OPEN.finditer(lower):
+        end = lower.find("</dt>", m.end(), m.end() + ROW_MAX)
+        if end < 0:
+            continue
+        dd = _DD_OPEN.match(lower, end + 5)
+        if not dd:
+            continue
+        close = lower.find("</dd>", dd.end(), dd.end() + ROW_MAX)
+        if close >= 0:
+            yield body[m.end():end], body[dd.end():close]
+
+
+def _rows(body: str, lower: str):
+    for m in _ROW_OPEN.finditer(lower):
+        end = lower.find(f"</{m.group(1)}>", m.end(), m.end() + ROW_MAX + 10)
+        if end >= 0:
+            yield body[m.end():end]
+
+
 def _from_tables(page: str) -> Specs:
     specs = Specs(method="spec-table")
-    body = _STRIP_RE.sub(" ", page)
-    for label, value in _DL_RE.findall(body):
+    body = _strip_blocks(page)
+    lower = body.lower()
+    for label, value in _dl_pairs(body, lower):
         _apply_label(specs, _text(label), _text(value))
-    for _tag, row in _ROW_RE.findall(body):
-        if len(row) > 600:
+    for row in _rows(body, lower):
+        if len(row) > ROW_MAX:
             continue
         cells = [c for c in (_text(x) for x in _CELL_SPLIT.split(row)) if c]
         if len(cells) >= 2:

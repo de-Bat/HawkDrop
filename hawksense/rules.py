@@ -62,7 +62,8 @@ _FWD_FIELDS = {
 }
 _WH_FIELDS = {
     "first": (0.0, 1000.0), "additional": (0.0, 1000.0), "first_kg": (0.01, 50.0), "step_kg": (0.01, 50.0),
-    "min_kg": (0.0, 100.0), "vol_divisor": (0.0, 20000.0), "sales_tax": (0.0, 0.3), "country": str,
+    "min_kg": (0.0, 100.0), "vol_divisor": (0.0, 20000.0), "min_price": (0.0, 500.0), "sales_tax": (0.0, 0.3),
+    "country": str,
     "location": str, "currency": str, "transit": str,
 }
 

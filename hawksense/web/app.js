@@ -843,8 +843,9 @@ function forwarderSheet() {
   if (!services.length) { toast('Sync once to load the forwarders'); return; }
   const whOptions = (svc) => svc.warehouses.map((w) => html`<option value="${w.code}">${w.code} · ${w.location}</option>`);
   const describe = (svc) => {
-    const r = svc.warehouses.map((w) => `${w.code}: ${w.rate.first} ${w.rate.currency} first ${w.rate.first_kg} kg + ${w.rate.additional}/${w.rate.step_kg} kg`).join(' · ');
-    return `${svc.notes ? `${svc.notes} ` : ''}Estimated rates: ${r}.`;
+    const r = svc.warehouses.map((w) => `${w.code}: ${w.rate.first} ${w.rate.currency} first ${w.rate.first_kg} kg + ${w.rate.additional}/${w.rate.step_kg} kg${w.rate.min_price ? `, min ${w.rate.min_price}` : ''}`).join(' · ');
+    const checked = (svc.verified || []).length ? ` Checked against the service's terms: ${svc.verified.join('; ')}.` : '';
+    return `${svc.notes ? `${svc.notes} ` : ''}Rates: ${r}.${checked}`;
   };
   const { form } = openSheet('Set up a package forwarder', html`
     <label>Service<select name="forwarder" id="fwd-service">${services.map((f) => html`<option value="${f.key}">${f.name}</option>`)}</select></label>

@@ -31,6 +31,12 @@ class RateCardTest(unittest.TestCase):
         self.assertEqual(self.card.chargeable_kg(0.5, (40, 30, 20)), 5.0)  # 24000 cm³ / 5000
         self.assertEqual(RateCard("USD", 1, 1, vol_divisor=None).chargeable_kg(0.5, (40, 30, 20)), 0.5)
 
+    def test_small_parcels_skip_volumetric_weight(self):
+        card = RateCard("USD", 10, 4, vol_free_cm=(43, 30, 10))
+        self.assertEqual(card.chargeable_kg(0.5, (40, 30, 10)), 0.5)  # fits 43x30x10: weight only
+        self.assertEqual(card.chargeable_kg(0.5, (10, 30, 40)), 0.5)  # in any orientation
+        self.assertEqual(card.chargeable_kg(0.5, (44, 30, 10)), 3.0)  # bigger: 13200 cm³ / 5000
+
     def test_minimum_weight(self):
         self.assertEqual(RateCard("USD", 1, 1, min_kg=2).chargeable_kg(0.3), 2.0)
 
@@ -76,8 +82,8 @@ class ForwardedCostTest(unittest.TestCase):
 
     def test_service_that_pays_taxes(self):
         lc = forwarded_cost(100, "USD", self.amazon, route("dealtas", address="x, New Castle, DE 19720"), IL,
-                            self.fx, "electronics", weight_kg=1.0)
-        intl = (13 + 5.5) * 4  # 1 kg on a 0.5 kg card
+                            self.fx, "electronics", weight_kg=2.0)
+        intl = (13 + 3 * 5.5) * 4  # 2 kg on a 0.5 kg card (above Dealtas's $20 minimum)
         self.assertEqual(lc.sales_tax, 0)
         self.assertEqual(lc.shipping, intl)  # $100 >= Amazon's free domestic shipping threshold
         self.assertAlmostEqual(lc.vat, (400 + intl) * 0.18)
@@ -96,7 +102,17 @@ class ForwardedCostTest(unittest.TestCase):
     def test_local_shipping_and_under_vat_threshold(self):
         lc = forwarded_cost(20, "USD", self.amazon, route("stackry"), IL, self.fx, weight_kg=0.5)
         self.assertEqual(lc.shipping, 6.99 * 4 + 18 * 4)  # under Amazon's $35 free-shipping line
-        self.assertEqual((lc.vat, lc.duty, lc.fees), (0, 0, 0))
+        self.assertEqual((lc.vat, lc.duty), (0, 0))
+        self.assertEqual(lc.fees, 1.5 * 4)  # Stackry's receiving fee only: no taxes due
+
+    def test_minimum_charge(self):
+        lc = forwarded_cost(100, "USD", self.amazon, route("dealtas"), IL, self.fx, weight_kg=0.3)
+        self.assertIn(("Dealtas shipping, 0.5 kg", 20 * 4), lc.lines)  # $13 card price, $20 minimum
+
+    def test_redbox_per_100_grams(self):
+        card = FORWARDERS["redbox"].warehouse("US").rate
+        self.assertEqual(card.price(card.chargeable_kg(0.2)), 3.5)  # up to 250 g
+        self.assertAlmostEqual(card.price(card.chargeable_kg(1.0)), 3.5 + 8 * 1.95)  # ~$19.50 a kg
 
     def test_buy_for_me_service_fee(self):
         lc = forwarded_cost(100, "USD", self.amazon, route("zipy"), IL, self.fx, weight_kg=0.5,

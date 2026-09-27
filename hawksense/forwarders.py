@@ -66,10 +66,15 @@ class RateCard:
     step_kg: float = 0.5
     min_kg: float = 0.0  # minimum chargeable weight
     vol_divisor: float | None = 5000.0  # cm³ per kg for volumetric weight; None = weight only
+    min_price: float = 0.0  # minimum charge per package
+    vol_free_cm: tuple[float, float, float] | None = None  # parcels up to this size are charged by weight only
+
+    def _small(self, dims_cm: tuple[float, float, float]) -> bool:
+        return bool(self.vol_free_cm) and all(d <= f for d, f in zip(sorted(dims_cm), sorted(self.vol_free_cm)))
 
     def chargeable_kg(self, weight_kg: float, dims_cm: tuple[float, float, float] | None = None) -> float:
         kg = weight_kg
-        if dims_cm and self.vol_divisor:
+        if dims_cm and self.vol_divisor and not self._small(dims_cm):
             kg = max(kg, dims_cm[0] * dims_cm[1] * dims_cm[2] / self.vol_divisor)
         kg = max(kg, self.min_kg, self.first_kg)
         extra = math.ceil(round((kg - self.first_kg) / self.step_kg, 6)) if kg > self.first_kg else 0
@@ -77,7 +82,7 @@ class RateCard:
 
     def price(self, chargeable_kg: float) -> float:
         extra = max(0, round((chargeable_kg - self.first_kg) / self.step_kg))
-        return self.first + extra * self.additional
+        return max(self.min_price, self.first + extra * self.additional)
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,7 @@ class Forwarder:
     tax_handling_fee: float = 0.0  # its fee for doing so, when taxes are due
     needs_address: bool = True  # you get a personal address/suite at each warehouse
     notes: str = ""
+    verified: tuple[str, ...] = ()  # values checked against the service's published terms, with the source
 
     def warehouse(self, code: str) -> Warehouse | None:
         code = code.upper()
@@ -118,20 +124,37 @@ def _usd(first, additional, **kw) -> RateCard:
     return RateCard("USD", first, additional, **kw)
 
 
+# Checked 2026-09-27. The service websites were not reachable from where this was written, so the
+# "verified" values come from web-search excerpts of each service's own pages (named in each entry);
+# everything else is an estimate. Check the live price lists and override in config.toml or the app.
+DEALTAS_SMALL_CM = (43.0, 30.0, 10.0)  # 17 x 12 x 4 in: charged by weight only
+IN3_PER_LB_139 = 139 * 16.387064 / 0.45359237  # "L x W x H (in) / 139" as cm³ per kg (~5022)
+
 FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
     Forwarder(
         "dealtas", "Dealtas", "USD",
-        (Warehouse("US", "US", "Delaware", _usd(13.0, 5.5), sales_tax=0.0, transit="7-14 days"),),
+        (Warehouse("US", "US", "Delaware",
+                   _usd(13.0, 5.5, min_price=20.0, vol_divisor=IN3_PER_LB_139, vol_free_cm=DEALTAS_SMALL_CM),
+                   sales_tax=0.0, transit="7-14 days"),),
         collects_import_taxes=True, tax_handling_fee=5.0,
         notes="Israeli service with a tax-free Delaware address; delivers to your door with customs "
-              "cleared and taxes billed through the service.",
+              "cleared and taxes billed through the service. Also offers FixDeal fixed prices per product "
+              "category. Per-pound rates are estimates.",
+        verified=("minimum shipping charge $20 (dealtas.com FAQ)",
+                  "volumetric weight = L x W x H in inches / 139, only for parcels over 17 x 12 x 4 in; "
+                  "smaller parcels by weight only (dealtas.com rates)"),
     ),
     Forwarder(
         "redbox", "RedBox", "USD",
-        (Warehouse("US", "US", "Delaware", _usd(12.0, 5.0), sales_tax=0.0, transit="7-14 days"),
+        (Warehouse("US", "US", "United States",
+                   _usd(3.5, 1.95, first_kg=0.25, step_kg=0.1), sales_tax=0.0, transit="7-14 days"),
          Warehouse("UK", "UK", "United Kingdom", RateCard("GBP", 11.0, 4.0), transit="7-14 days")),
-        collects_import_taxes=True, tax_handling_fee=5.0,
-        notes="Israeli service with US and UK addresses; handles customs clearance for you.",
+        collects_import_taxes=True, tax_handling_fee=0.0,
+        notes="Israeli service with addresses in the US and Europe; customs fees built into the price. "
+              "UK/Europe rates are estimates.",
+        verified=("US: about $3.50 up to 250 g, about $19.50 per kg, charged per 100 g on actual or "
+                  "volumetric weight, whichever is higher (redboxparcel.com; Maariv, reutbuyitforme.com)",
+                  "customs handling built into the price (ynet comparison)"),
     ),
     Forwarder(
         "zipy", "Zipy (buys for you)", "USD",
@@ -140,37 +163,52 @@ FORWARDERS: dict[str, Forwarder] = {f.key: f for f in [
          Warehouse("DE", "DE", "Germany", _usd(12.0, 5.0), transit="10-20 days"),
          Warehouse("CN", "CN", "China", _usd(6.0, 3.0), transit="14-30 days")),
         service_fee_rate=0.07, service_fee_min=4.0, collects_import_taxes=True, needs_address=False,
-        notes="Israeli 'buy for me' service: it orders the item for you, so no address is needed. "
-              "Price quoted up front including shipping and taxes; charges a service fee.",
+        notes="Israeli 'buy for me' service in Hebrew (AliExpress, eBay, Amazon, Allegro): it orders the "
+              "item for you, so no address is needed; offers a customs refund guarantee. Fees and rates "
+              "are estimates.",
     ),
     Forwarder(
         "myus", "MyUS", "USD",
         (Warehouse("US", "US", "Sarasota, Florida", _usd(24.0, 6.0), sales_tax=0.07, transit="3-6 days (express)"),),
         handling_fee=0.0, insurance_rate=0.0,
         notes="Express courier (DHL/FedEx); the courier collects Israeli taxes and adds a clearance fee. "
-              "Membership plans change the handling fees.",
+              "Premium membership ($9.99/month) gives lower rates and free consolidation. Rates to Israel "
+              "are estimates.",
+        verified=("shipping rates start at $9.99; Premium membership $9.99/month after a 30-day trial, "
+                  "free consolidation and 30 days' storage (myus.com pricing)",),
     ),
     Forwarder(
         "shipito", "Shipito", "USD",
         (Warehouse("US", "US", "Portland, Oregon", _usd(19.0, 5.0), sales_tax=0.0, transit="5-15 days"),
          Warehouse("US-CA", "US", "Torrance, California", _usd(19.0, 5.0), sales_tax=0.10, transit="5-15 days")),
-        handling_fee=2.5,
-        notes="Oregon warehouse is sales-tax free.",
+        handling_fee=3.25,
+        notes="The sales-tax-free Oregon address needs a Premium account, which also cuts the handling fee "
+              "to $2.25 (set handling_fee = 2.25 if you have one). Shipping rates are estimates.",
+        verified=("processing fee $3.25 per package on a free account, $2.25 with Premium; the Oregon "
+                  "tax-free warehouse is Premium-only (shipito.com FAQ, as of 2026-08-02)",),
     ),
     Forwarder(
         "stackry", "Stackry", "USD",
-        (Warehouse("US", "US", "Salem, New Hampshire", _usd(18.0, 5.0), sales_tax=0.0, transit="4-10 days"),),
-        notes="New Hampshire address: no sales tax; free consolidation.",
+        (Warehouse("US", "US", "New Hampshire", _usd(18.0, 5.0), sales_tax=0.0, transit="4-10 days"),),
+        handling_fee=1.5,
+        notes="New Hampshire address: no sales tax. Receiving $1-2 per package depending on destination "
+              "(1.5 used), consolidation $3. Shipping rates are estimates.",
+        verified=("receiving fee $1-2 per package by destination, consolidation $3 per package "
+                  "(parcelforward.net review of stackry.com pricing)",),
     ),
     Forwarder(
         "planetexpress", "Planet Express", "USD",
         (Warehouse("US", "US", "Torrance, California", _usd(17.0, 5.0), sales_tax=0.10, transit="4-10 days"),),
         handling_fee=2.0,
+        notes="Consolidation $5 plus $2 per package. Shipping rates are estimates.",
+        verified=("handling fee $2 per incoming package; consolidation $5 + $2 per package "
+                  "(planetexpress.com pricing, via reviews)",),
     ),
     Forwarder(
         "forward2me", "Forward2me", "GBP",
         (Warehouse("UK", "UK", "United Kingdom", RateCard("GBP", 15.0, 3.0), transit="3-7 days"),),
-        notes="UK address. UK prices include 20% UK VAT, which is not refunded on forwarded orders.",
+        notes="UK address. UK prices include 20% UK VAT, which is not refunded on forwarded orders. "
+              "Rates are estimates.",
     ),
 ]}
 

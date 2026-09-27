@@ -120,13 +120,13 @@ hawksense compare "WH-1000XM5" --explore   # also price services you haven't set
 
 | Service | Warehouses | Notable rules |
 |---|---|---|
-| Dealtas | US (Delaware) | no sales tax; customs cleared and taxes billed through the service |
-| RedBox | US (Delaware), UK | taxes billed through the service |
+| Dealtas | US (Delaware) | no sales tax; $20 minimum; volumetric (in³/139) only above 17×12×4 in; taxes billed through the service |
+| RedBox | US, UK | ~$3.50 up to 250 g, ~$19.50/kg, per 100 g; customs handling included |
 | Zipy | US, UK, DE, CN | buys for you (no address); service fee on the order; taxes included |
-| MyUS | US (Florida) | 7% FL sales tax; express courier collects taxes and adds a clearance fee |
-| Shipito | US (Oregon), US-CA (California) | Oregon is sales-tax free; handling fee |
-| Stackry | US (New Hampshire) | no sales tax |
-| Planet Express | US (California) | CA sales tax; handling fee |
+| MyUS | US (Florida) | 7% FL sales tax; rates from $9.99, Premium $9.99/month; courier collects taxes |
+| Shipito | US (Oregon), US-CA (California) | $3.25 handling ($2.25 Premium); tax-free Oregon needs Premium |
+| Stackry | US (New Hampshire) | no sales tax; $1–2 receiving, $3 consolidation |
+| Planet Express | US (California) | CA sales tax; $2 handling, consolidation $5 + $2/package |
 | Forward2me | UK | UK prices include 20% VAT |
 
 How a forwarded price is built:
@@ -147,8 +147,10 @@ How a forwarded price is built:
 **Settings → Package forwarders** (works offline too), and set weight and box size in an
 item's edit sheet.
 
-> The forwarder rates and fees are rough estimates and change often. Check each service's
-> current price list and override them in config.toml (see below). Stores that aren't
+> Values checked against each service's published terms (September 2026) are marked ✓ in
+> `hawksense forwarders` and in the app; everything else, including most per-kilo rates, is an
+> estimate. Prices change often: check each service's price list and override them in the app
+> (Settings → Taxes & forwarder rates) or in config.toml (see below). Stores that aren't
 > built in are assumed to ship to you directly unless you set `ships_abroad = false`.
 
 ## Weight and size

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-09-26",
-  "notes": "HawkSense rules feed. Installs check this file (weekly by default) and apply changes; changes over 50% wait for the user's review. Keep values in the same units as hawksense/landed.py and hawksense/forwarders.py. Forwarder rates are estimates - update them from each service's price list.",
+  "updated": "2026-09-27",
+  "notes": "HawkSense rules feed. Installs check this file (weekly by default) and apply changes; changes over 50% wait for the user's review. Keep values in the same units as hawksense/landed.py and hawksense/forwarders.py. Forwarder values marked 'verified' in hawksense/forwarders.py were checked on 2026-09-27; the rest are estimates - update them from each service's price list.",
   "destination": {
     "IL": {
       "name": "Israel",
@@ -92,7 +92,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5021.6935880116325,
+          "min_price": 20.0
         }
       }
     },
@@ -105,21 +106,22 @@
       "service_fee_rate": 0.0,
       "service_fee_min": 0.0,
       "collects_import_taxes": true,
-      "tax_handling_fee": 5.0,
+      "tax_handling_fee": 0.0,
       "needs_address": true,
       "warehouses": {
         "US": {
           "country": "US",
-          "location": "Delaware",
+          "location": "United States",
           "sales_tax": 0.0,
           "transit": "7-14 days",
           "currency": "USD",
-          "first": 12.0,
-          "additional": 5.0,
-          "first_kg": 0.5,
-          "step_kg": 0.5,
+          "first": 3.5,
+          "additional": 1.95,
+          "first_kg": 0.25,
+          "step_kg": 0.1,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         },
         "UK": {
           "country": "UK",
@@ -132,7 +134,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
@@ -159,7 +162,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         },
         "UK": {
           "country": "UK",
@@ -172,7 +176,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         },
         "DE": {
           "country": "DE",
@@ -185,7 +190,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         },
         "CN": {
           "country": "CN",
@@ -198,7 +204,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
@@ -225,14 +232,15 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
     "shipito": {
       "name": "Shipito",
       "currency": "USD",
-      "handling_fee": 2.5,
+      "handling_fee": 3.25,
       "insurance_rate": 0.0,
       "insurance_min": 0.0,
       "service_fee_rate": 0.0,
@@ -252,7 +260,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         },
         "US-CA": {
           "country": "US",
@@ -265,14 +274,15 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
     "stackry": {
       "name": "Stackry",
       "currency": "USD",
-      "handling_fee": 0.0,
+      "handling_fee": 1.5,
       "insurance_rate": 0.0,
       "insurance_min": 0.0,
       "service_fee_rate": 0.0,
@@ -283,7 +293,7 @@
       "warehouses": {
         "US": {
           "country": "US",
-          "location": "Salem, New Hampshire",
+          "location": "New Hampshire",
           "sales_tax": 0.0,
           "transit": "4-10 days",
           "currency": "USD",
@@ -292,7 +302,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
@@ -319,7 +330,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     },
@@ -346,7 +358,8 @@
           "first_kg": 0.5,
           "step_kg": 0.5,
           "min_kg": 0.0,
-          "vol_divisor": 5000.0
+          "vol_divisor": 5000.0,
+          "min_price": 0.0
         }
       }
     }

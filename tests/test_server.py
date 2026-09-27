@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -208,6 +209,80 @@ class TokenTest(ServerTest):
         status, body = self.call("GET", "/api/health")
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
+
+
+class RequestForgeryTest(ServerTest):
+    """A web page you visit must not be able to drive a token-less local server."""
+
+    def test_simple_cross_site_posts_are_refused(self):
+        status, _ = self.call("POST", "/api/items", {"name": "x"}, {"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+        status, _ = self.call("POST", "/api/items", {"name": "x"}, {"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        status, _ = self.call("POST", "/api/items", {"name": "x"}, {"Origin": "https://evil.example"})
+        self.assertEqual(status, 403)
+        status, _ = self.call("POST", "/api/items", {"name": "x"}, {"Origin": "null"})
+        self.assertEqual(status, 403)
+        _, snap = self.call("GET", "/api/snapshot")
+        self.assertEqual(snap["items"], [])
+
+    def test_same_origin_and_non_browser_clients_work(self):
+        host = self.base.split("//")[1]
+        status, _ = self.call("POST", "/api/items", {"name": "a"},
+                              {"Sec-Fetch-Site": "same-origin", "Origin": f"http://{host}"})
+        self.assertEqual(status, 201)
+        status, _ = self.call("POST", "/api/items", {"name": "b"}, {"Origin": f"http://{host}"})  # older browsers
+        self.assertEqual(status, 201)
+        status, _ = self.call("POST", "/api/items", {"name": "c"})  # curl, scripts
+        self.assertEqual(status, 201)
+
+    def test_dns_rebinding_is_refused(self):
+        status, body = self.call("GET", "/api/snapshot", headers={"Host": "evil.example"})
+        self.assertEqual(status, 403)
+        self.assertIn("HAWKSENSE_ALLOWED_HOSTS", body["error"])
+        for host in ("localhost:8765", "127.0.0.1", "[::1]:8765", "192.168.1.20", "raspberrypi.local",
+                     "nas", "hawksense.home.arpa"):
+            self.assertEqual(self.call("GET", "/api/meta", headers={"Host": host})[0], 200, host)
+
+    def test_javascript_links_are_refused(self):
+        status, body = self.call("POST", "/api/items", {"name": "x", "urls": ["javascript:alert(1)//"]})
+        self.assertEqual(status, 400)
+        _, item = self.call("POST", "/api/items", {"name": "y"})
+        status, _ = self.call("POST", f"/api/items/{item['id']}/offers", {"url": "data:text/html,<script>"})
+        self.assertEqual(status, 400)
+        status, _ = self.call("POST", f"/api/items/{item['id']}/prices", {"store": "javascript:x//", "price": 1})
+        self.assertEqual(status, 400)
+
+    def test_internal_errors_do_not_leak_details(self):
+        with unittest.mock.patch("hawksense.api.meta", side_effect=RuntimeError("/secret/path/db")):
+            status, body = self.call("GET", "/api/meta")
+        self.assertEqual(status, 500)
+        self.assertNotIn("secret", json.dumps(body))
+
+
+class TokenHardeningTest(ServerTest):
+    token = "S3CRET-TOKEN"
+
+    def test_token_never_reaches_the_log(self):
+        from hawksense.server import Handler
+
+        lines = []
+        with unittest.mock.patch("http.server.BaseHTTPRequestHandler.log_message",
+                                 lambda self, fmt, *args: lines.append(fmt % args)):
+            h = Handler.__new__(Handler)
+            Handler.log_message(h, '"%s" %s', "GET /?token=S3CRET-TOKEN&x=1 HTTP/1.1", "200")
+        self.assertNotIn("S3CRET", lines[0])
+        self.assertIn("token=[redacted]&x=1", lines[0])
+
+    def test_any_host_is_fine_with_a_token(self):
+        status, _ = self.call("GET", "/api/meta", headers={"Host": "hawksense.example.com",
+                                                           "X-HawkSense-Token": self.token})
+        self.assertEqual(status, 200)
+
+    def test_wrong_tokens_are_rate_limited(self):
+        codes = [self.call("GET", "/api/meta", headers={"X-HawkSense-Token": "nope"})[0] for _ in range(21)]
+        self.assertEqual(codes[:20], [401] * 20)
+        self.assertEqual(codes[20], 429)
 
 
 class BasePathTest(ServerTest):

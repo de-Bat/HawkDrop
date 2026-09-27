@@ -201,5 +201,99 @@ class EncryptedSettingsTest(unittest.TestCase):
         self.assertFalse(token["is_set"])
 
 
+class HostileContentTest(unittest.TestCase):
+    """Pages come from anywhere: parsing must stay fast however broken the HTML is."""
+
+    def fast(self, fn, page, limit=3.0):
+        import time
+
+        start = time.monotonic()
+        try:
+            fn(page)
+        except FetchError:
+            pass
+        self.assertLess(time.monotonic() - start, limit, f"{fn.__name__} took too long")
+
+    def test_unclosed_tags_parse_in_linear_time(self):
+        from hawksense.ebay import parse_search_page
+        from hawksense.fetch import extract_price
+        from hawksense.specs import extract_specs
+
+        n = 400_000  # the old parser needed minutes for pages like these
+        self.fast(extract_specs, "<div>" * (n // 5))
+        self.fast(extract_specs, "<dt>x</dt>" * (n // 10))
+        self.fast(extract_specs, "<script>" * (n // 8))
+        self.fast(extract_price, '<script type="application/ld+json">' * (n // 35))
+        self.fast(lambda p: extract_price(p, "https://www.amazon.com/dp/X"), 'id="corePrice_feature_div"' * (n // 26))
+        self.fast(lambda p: extract_price(p, "https://www.ebay.com/itm/1"), '<div class="x-price-primary">' * (n // 29))
+        self.fast(parse_search_page, '<li class="s-item">' * (n // 19))
+
+    def test_store_patterns_follow_the_host_not_the_path(self):
+        from hawksense.fetch import extract_store_specific
+
+        page = '<span class="a-price"><span class="a-offscreen">$12.00</span></span>'
+        self.assertIsNotNone(extract_store_specific(page, "https://www.amazon.com/dp/X"))
+        self.assertIsNone(extract_store_specific(page, "https://evil.example/amazon.html"))
+
+
+class OfferLinkTest(unittest.TestCase):
+    def test_only_web_links_and_store_names(self):
+        from hawksense.tracker import clean_offer_ref
+
+        self.assertEqual(clean_offer_ref(" https://ksp.co.il/item/1 "), "https://ksp.co.il/item/1")
+        self.assertEqual(clean_offer_ref("shop.co.il/p/1"), "https://shop.co.il/p/1")
+        self.assertEqual(clean_offer_ref("ivory"), "ivory")
+        self.assertEqual(clean_offer_ref("Local shop"), "Local shop")
+        for bad in ["javascript:alert(1)//", "JavaScript:alert(1)", "java\tscript:alert(1)", "data:text/html,x",
+                    "vbscript:x", "//evil.example/x", "file:///etc/passwd", "https://", "", "x\ny"]:
+            with self.assertRaises(ValueError, msg=bad):
+                clean_offer_ref(bad)
+
+
+class NotifyLeakTest(unittest.TestCase):
+    def test_http_errors_do_not_echo_the_response_body(self):
+        from hawksense import notify
+
+        err = notify.urllib.error.HTTPError("http://x", 500, "Server Error", {}, io.BytesIO(b"INTERNAL SECRET PAGE"))
+        with mock.patch.object(notify.urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(notify.NotifyError) as ctx:
+                notify._urllib_http("GET", "http://x", {}, None)
+        self.assertNotIn("SECRET", str(ctx.exception))
+
+    def test_newline_in_an_item_name_does_not_break_email(self):
+        from hawksense.notify import Email, Message
+
+        sent = []
+
+        class SMTP:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def send_message(self, m):
+                sent.append(m)
+
+        ch = Email({"host": "smtp.example", "to": "me@example.com"}, None, {})
+        with mock.patch.object(Email, "smtp_factory", SMTP):
+            ch.send(Message("buy_now", "Buy now: Evil\nBcc: victim@example.com"))
+        self.assertEqual(sent[0]["Subject"], "HawkSense: Buy now: Evil Bcc: victim@example.com")
+        self.assertIsNone(sent[0]["Bcc"])
+
+
+class FilePermissionTest(unittest.TestCase):
+    def test_database_and_backups_are_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "p.db")
+            db.backup(Path(tmp) / "b.db")
+            db.close()
+            for name in ("p.db", "b.db"):
+                self.assertEqual((Path(tmp) / name).stat().st_mode & 0o777, 0o600, name)
+
+
 if __name__ == "__main__":
     unittest.main()

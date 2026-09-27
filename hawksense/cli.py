@@ -119,7 +119,10 @@ def cmd_track(t: Tracker, a):
         t.db.update_item(item, weight_kg=a.weight, dims=dims)
         print(f"Tracking #{item.id} {item.name} [{item.category}]")
     for url in a.url or []:
-        offer = t.add_offer(item, url)
+        try:
+            offer = t.add_offer(item, url)
+        except ValueError as exc:
+            raise SystemExit(f"error: {url}: {exc}") from None
         print(f"  + {t.store_for(offer).name}: {url}")
     if a.url and not a.no_check:
         _print_check(t, item)
@@ -135,7 +138,10 @@ def cmd_add_offer(t: Tracker, a):
         url = search_url(a.ebay_search, a.ebay_site, None if a.condition == "any" else a.condition)
     elif not url:
         raise SystemExit("error: give a product URL, a store key, or --ebay-search QUERY")
-    offer = t.add_offer(item, url, a.shipping, a.shipping_currency, a.regex, a.local_shipping)
+    try:
+        offer = t.add_offer(item, url, a.shipping, a.shipping_currency, a.regex, a.local_shipping)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
     store = t.store_for(offer)
     print(f"Added {store.name} ({store.country}, {store.currency}) to {item.name}")
     if a.ebay_search:
@@ -150,7 +156,10 @@ def cmd_add_offer(t: Tracker, a):
 def cmd_price(t: Tracker, a):
     item = _item(t, a.item)
     when = date.fromisoformat(a.date) if a.date else None
-    offer = t.record_price(item, a.store, a.price, a.currency, a.shipping, not a.out_of_stock, when)
+    try:
+        offer = t.record_price(item, a.store, a.price, a.currency, a.shipping, not a.out_of_stock, when)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from None
     store = t.store_for(offer)
     print(f"Recorded {money(a.price, (a.currency or store.currency).upper())} at {store.name} for {item.name}")
 

@@ -452,10 +452,24 @@ environment variable, which wins over the config file.
 Security notes:
 
 - `/api/health` is the only endpoint that works without the token.
-- Tokens are compared in constant time.
+- Tokens are compared in constant time, and more than 20 wrong tokens a minute from one
+  address get "try again later". Tokens are redacted from the server log (the app URL can
+  carry `?token=`).
+- **Other websites can't drive your HawkSense**, even without a token. The API only accepts
+  JSON requests, and refuses requests the browser marks as coming from another site. A web
+  page you visit can't add items, change rules or change settings behind your back.
+- **DNS rebinding is blocked on servers without a token.** They only answer to IP addresses,
+  `localhost` and local network names (`*.local`, `*.lan`, `*.home.arpa`, single-word names
+  like `nas`). To reach a token-less server under another name, list it in
+  `HAWKSENSE_ALLOWED_HOSTS` (comma-separated), or better, set a token; with a token any host
+  name works.
+- Product links must be `http`/`https`, so a `javascript:` link can't be planted in the app.
 - Pages are sent with a strict Content-Security-Policy and `Referrer-Policy: no-referrer`,
   so the token in the app URL never leaks to store sites.
 - The server logs a warning if it is reachable from the network without a token.
+- Internal errors are logged on the server; the API only says that one happened. The database
+  and backups are readable by their owner only.
+- Pages from store sites are parsed in linear time, so a hostile page can't tie up the server.
 - **Outbound fetches are limited to the public internet.** Product links, spec pages, rule
   sources and the rules feed can only be `http`/`https` addresses. Anything that points to
   your own network, the machine itself or a cloud metadata service (127.0.0.1, 192.168.x,

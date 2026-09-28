@@ -336,9 +336,15 @@ hawksense serve --host 0.0.0.0 --token MYSECRET --check-every 6   # reachable fr
 
 To run it permanently on a home server, NAS or VPS, see [Self-hosting](#self-hosting).
 
-The web client lets you see your items, the buy/wait advice with its confidence, a price
-chart with past sales shaded, the delivered-price breakdown for each store, and the sales
-calendar. From it you can log prices, add stores and track new items.
+The web client lets you see your items (each with its picture, read automatically from the
+store pages), the buy/wait advice with its confidence, a price chart with past sales shaded,
+the delivered-price breakdown for each store, and the sales calendar. From it you can log
+prices, add stores and track new items. A search box on the items list finds one by name,
+category or store once you're tracking a handful. When you add an item, "Search all stores"
+adds a search offer at every store that supports one (Amazon, AliExpress, Newegg, eBay) so
+its own next check fills in prices without you hunting for links; and every store's "Other
+ways to get it" lists every forwarder that could ship it, not just the ones you've already
+set up, with a one-tap "Set up this forwarder" for the rest.
 
 **Offline.** The app is offline-first:
 

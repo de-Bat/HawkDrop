@@ -180,7 +180,7 @@ function applyOp(snap, op) {
     case 'update_item':
       if (item) {
         if (b.category) item.category = b.category;
-        for (const k of ['target_price', 'weight_kg', 'dims']) if (k in b) item[k] = b[k] === '' ? null : b[k];
+        for (const k of ['target_price', 'weight_kg', 'dims', 'image_url']) if (k in b) item[k] = b[k] === '' ? null : b[k];
         if ('muted' in b) item.muted = b.muted;
         if ('weight_kg' in b && item.specs) item.specs.weight_source = b.weight_kg === '' ? null : 'manual';
         if ('dims' in b && item.specs) item.specs.dims_source = b.dims === '' ? null : 'manual';

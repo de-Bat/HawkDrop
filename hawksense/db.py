@@ -122,6 +122,7 @@ class Item:
     dims_source: str | None = None
     specs_status: str | None = None  # last consensus: verified | unverified | conflict | missing
     muted: bool = False  # no notifications about this item
+    image_url: str | None = None  # picture read from a store page, or set by you
 
 
 @dataclass
@@ -193,7 +194,7 @@ class Database:
             if "local_shipping" not in offer_cols:
                 self.conn.execute("ALTER TABLE offers ADD COLUMN local_shipping REAL")
             for col, decl in (("weight_source", "TEXT"), ("dims_source", "TEXT"), ("specs_status", "TEXT"),
-                              ("muted", "INTEGER NOT NULL DEFAULT 0")):
+                              ("muted", "INTEGER NOT NULL DEFAULT 0"), ("image_url", "TEXT")):
                 if col not in item_cols:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {decl}")
             # lets offline clients replay queued price entries without creating duplicates
@@ -230,14 +231,14 @@ class Database:
 
     def update_item(self, item: Item, category: str | None = None, target_price: float | None = None,
                     weight_kg: float | None = None, dims: str | None = None, source: str = "manual",
-                    muted: bool | None = None):
+                    muted: bool | None = None, image_url: str | None = None):
         """Set the given fields; ``None`` leaves a field unchanged (see ``clear_item_field``).
 
         A weight or size set with ``source="manual"`` is never replaced by values read from store pages.
         """
         with self.conn:
             for col, value in (("category", category), ("target_price", target_price),
-                               ("weight_kg", weight_kg), ("dims", dims)):
+                               ("weight_kg", weight_kg), ("dims", dims), ("image_url", image_url)):
                 if value is not None:
                     self.conn.execute(f"UPDATE items SET {col} = ? WHERE id = ?", (value, item.id))
             if weight_kg is not None:
@@ -253,7 +254,7 @@ class Database:
 
     def clear_item_field(self, item: Item, col: str):
         """Clearing a weight/size hands it back to automatic detection."""
-        if col not in ("target_price", "weight_kg", "dims"):
+        if col not in ("target_price", "weight_kg", "dims", "image_url"):
             raise ValueError(col)
         source_col = {"weight_kg": "weight_source", "dims": "dims_source"}.get(col)
         with self.conn:

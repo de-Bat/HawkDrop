@@ -180,7 +180,8 @@ class EbayApi:
         aspects = [(a.get("name", ""), a.get("value", "")) for a in data.get("localizedAspects") or []]
         return Extraction(price, currency, "OUT_OF_STOCK" not in status or "IN_STOCK" in status,
                           _shipping(data.get("shippingOptions"), currency), data.get("title"), "ebay-api",
-                          url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"))
+                          url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"),
+                          image=(data.get("image") or {}).get("imageUrl"))
 
     def search(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US") -> Extraction:
         filters = ["buyingOptions:{FIXED_PRICE}"]
@@ -195,7 +196,7 @@ class EbayApi:
                 continue
             ship = _shipping(s.get("shippingOptions"), currency)
             found.append(Extraction(price, currency, True, ship, s.get("title"), "ebay-api search",
-                                    url=s.get("itemWebUrl")))
+                                    url=s.get("itemWebUrl"), image=(s.get("image") or {}).get("imageUrl")))
         return _cheapest(found, query)
 
 
@@ -215,6 +216,7 @@ _PRICE_RE = re.compile(r'class="[^"]*s-(?:item|card)__price[^"]*"[^>]*>(.*?)</sp
 _SHIP_RE = re.compile(r'class="[^"]*s-(?:item__shipping|item__logisticsCost|card__shipping)[^"]*"[^>]*>(.*?)</span>',
                       re.S)
 _TITLE_RE = re.compile(r'class="[^"]*s-(?:item|card)__title[^"]*"[^>]*>(?:<span[^>]*>)?(.*?)</', re.S)
+_IMG_RE = re.compile(r'<img[^>]+(?:data-)?src="(https://[^"]+)"', re.S)
 _TAGS_RE = re.compile(r"<[^>]+>")
 
 
@@ -257,8 +259,10 @@ def parse_search_page(page: str, currency: str | None = None) -> Extraction:
             elif re.search(r"\d", ship_text):
                 shipping = parse_number(ship_text)
         title = _TITLE_RE.search(block)
+        image = _IMG_RE.search(block)
         found.append(Extraction(value, guess_currency(price_text) or currency, True, shipping,
-                                _text(title.group(1)) if title else None, "ebay-search-page", url=url))
+                                _text(title.group(1)) if title else None, "ebay-search-page", url=url,
+                                image=image.group(1) if image else None))
     if not found:
         if re.search(r"captcha|robot|pardon our interruption", page, re.I):
             raise FetchError("eBay blocked the request - add eBay API keys (see README) or log the price manually")

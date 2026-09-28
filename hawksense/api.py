@@ -81,13 +81,14 @@ def landed(lc: LandedCost) -> dict:
             "lines": [[label, _r(v)] for label, v in lc.lines]}
 
 
-def quote(q: Quote) -> dict:
+def quote(q: Quote, all_routes: list[LandedCost] | None = None) -> dict:
     return {
         "offer_id": q.offer.id, "store_key": q.store.key, "store": q.store.name, "country": q.store.country,
         "url": q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
         "seen": q.point.ts.isoformat(), "source": q.point.source,
         "landed": landed(q.landed),
-        "routes": [landed(lc) for lc in q.routes],
+        # every capable forwarder, including ones you haven't set up yet (marked "set_up": false)
+        "routes": [landed(lc) for lc in (all_routes if all_routes is not None else q.routes)],
     }
 
 
@@ -171,12 +172,15 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
         for key in sorted(keys):
             for s, e in EVENTS[key].occurrences(series[0][0], today):
                 windows.append({"name": EVENTS[key].name, "start": s.isoformat(), "end": e.isoformat()})
+    # every capable forwarder for each quote, not just the ones you've already set up
+    quotes_json = [quote(q, t.landed_options(item, q.offer, q.point, q.store, explore=True)) for q in quotes]
     return {
         "id": item.id, "name": item.name, "category": item.category, "target_price": item.target_price,
         "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at, "muted": item.muted,
+        "image_url": item.image_url,
         "specs": specs(t, item),
-        "best": quote(quotes[0]) if quotes else None,
-        "quotes": [quote(q) for q in quotes],
+        "best": quotes_json[0] if quotes_json else None,
+        "quotes": quotes_json,
         "offers": offers,
         "advice": advice(adv),
         "history": [[d.isoformat(), _r(p)] for d, p in series],

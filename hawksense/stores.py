@@ -8,7 +8,7 @@ estimates: override them per offer with ``--shipping`` or in config.toml.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 IL_EVENTS = ("black_friday", "singles_day", "rosh_hashana", "passover", "back_to_school")
 AMAZON_EVENTS = ("black_friday", "prime_day", "prime_big_deal", "year_end", "back_to_school")
@@ -33,6 +33,7 @@ class StoreProfile:
     ships_abroad: bool | None = None  # ships to you directly; False = only via a forwarder, None = unknown
     local_shipping_flat: float | None = None  # domestic shipping, e.g. to a forwarder's warehouse
     local_free_over: float | None = None
+    search_template: str | None = None  # "https://.../search?q={q}" - {q} is the URL-encoded query
 
     def shipping_for(self, price: float) -> float | None:
         if self.shipping_free_over is not None and price >= self.shipping_free_over:
@@ -60,16 +61,19 @@ STORES: dict[str, StoreProfile] = {s.key: s for s in [
     StoreProfile("amazon_us", "Amazon.com", ("amazon.com",), "US", "USD", AMAZON_EVENTS,
                  shipping_flat=12.0, shipping_free_over=49.0, collects_import_vat=True,
                  regions=("AMAZON", "US", "GLOBAL"), ships_abroad=True, local_shipping_flat=6.99,
-                 local_free_over=35.0,
+                 local_free_over=35.0, search_template="https://www.amazon.com/s?k={q}",
                  notes="Free shipping to Israel on eligible orders over $49; import fees deposit at checkout."),
     StoreProfile("amazon_uk", "Amazon.co.uk", ("amazon.co.uk",), "UK", "GBP", AMAZON_EVENTS,
                  shipping_flat=10.0, collects_import_vat=True, regions=("AMAZON", "UK", "GLOBAL"),
-                 ships_abroad=True, local_shipping_flat=4.49, local_free_over=35.0),
+                 ships_abroad=True, local_shipping_flat=4.49, local_free_over=35.0,
+                 search_template="https://www.amazon.co.uk/s?k={q}"),
     StoreProfile("amazon_de", "Amazon.de", ("amazon.de",), "DE", "EUR", AMAZON_EVENTS,
                  shipping_flat=12.0, collects_import_vat=True, regions=("AMAZON", "EU", "GLOBAL"),
-                 ships_abroad=True, local_shipping_flat=3.99, local_free_over=39.0),
+                 ships_abroad=True, local_shipping_flat=3.99, local_free_over=39.0,
+                 search_template="https://www.amazon.de/s?k={q}"),
     StoreProfile("aliexpress", "AliExpress", ("aliexpress.com", "aliexpress.us", "he.aliexpress.com"), "CN", "USD",
                  CN_EVENTS, shipping_flat=0.0, collects_import_vat=True, regions=("CN", "GLOBAL"), ships_abroad=True,
+                 search_template="https://www.aliexpress.com/wholesale?SearchText={q}",
                  notes="Most items ship free; VAT is collected at checkout for low-value orders."),
     StoreProfile("ebay", "eBay", ("ebay.com",), "US", "USD", US_EVENTS, regions=("US", "GLOBAL"),
                  notes="Shipping varies per listing: read from the listing when possible, else set it with "
@@ -81,7 +85,8 @@ STORES: dict[str, StoreProfile] = {s.key: s for s in [
     StoreProfile("bhphoto", "B&H Photo", ("bhphotovideo.com",), "US", "USD", US_EVENTS, regions=("US",),
                  ships_abroad=True, local_shipping_flat=0.0),
     StoreProfile("newegg", "Newegg", ("newegg.com",), "US", "USD", US_EVENTS, regions=("US",),
-                 ships_abroad=False, notes="Ships within the US only - use a forwarder."),
+                 ships_abroad=False, search_template="https://www.newegg.com/p/pl?d={q}",
+                 notes="Ships within the US only - use a forwarder."),
 ]}
 
 _TLD_COUNTRY = {
@@ -125,5 +130,16 @@ def resolve_store(url_or_key: str) -> StoreProfile:
 def with_overrides(store: StoreProfile, overrides: dict) -> StoreProfile:
     """Apply a [stores.<key>] table from config.toml."""
     allowed = {"name", "country", "currency", "shipping_flat", "shipping_free_over", "collects_import_vat",
-               "ships_abroad", "local_shipping_flat", "local_free_over"}
+               "ships_abroad", "local_shipping_flat", "local_free_over", "search_template"}
     return replace(store, **{k: v for k, v in overrides.items() if k in allowed})
+
+
+def search_url(store: StoreProfile, query: str) -> str | None:
+    """A search-results page for ``query`` at this store, if it supports one (best effort: sites change)."""
+    if not store.search_template:
+        return None
+    return store.search_template.format(q=quote_plus(query))
+
+
+def stores_with_search() -> list[StoreProfile]:
+    return [s for s in STORES.values() if s.search_template]

@@ -56,6 +56,7 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   bell: '<path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>',
   box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
 };
 const icon = (name, cls = 'icon') => raw(`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`);
 
@@ -147,6 +148,35 @@ function installHint() {
 
 // ---- views ---------------------------------------------------------------------------------------
 
+let itemSearch = '';
+function itemSearchText(it) {
+  const best = it.best;
+  return [it.name, it.category, best ? best.store : '', ...(it.offers || []).map((o) => o.store)].join(' ').toLowerCase();
+}
+
+function filterItemCards() {
+  const q = itemSearch.trim().toLowerCase();
+  const cards = [...document.querySelectorAll('#view .item-card')];
+  let shown = 0;
+  for (const card of cards) {
+    const match = !q || (card.dataset.search || '').includes(q);
+    card.hidden = !match;
+    if (match) shown += 1;
+  }
+  const empty = document.getElementById('search-empty');
+  if (empty) empty.hidden = !q || shown > 0;
+  const clear = document.getElementById('search-clear');
+  if (clear) clear.hidden = !itemSearch;
+}
+
+function searchBar() {
+  return html`<div class="search-bar">
+    ${icon('search')}
+    <input id="item-search" type="search" placeholder="Search your items…" autocomplete="off" value="${itemSearch}">
+    <button type="button" class="icon-btn clear" id="search-clear" data-action="clear-search" aria-label="Clear search" ${itemSearch ? '' : 'hidden'}>${icon('close')}</button>
+  </div>`;
+}
+
 function viewList() {
   const snap = state.snapshot;
   const items = snap.items;
@@ -165,10 +195,13 @@ function viewList() {
         </div>
       </section>`;
   }
+  const q = itemSearch.trim().toLowerCase();
   const cards = items.map((it) => {
     const best = it.best;
     const pendingN = (it.pending_prices || []).length;
-    return html`<a class="card item-card" href="#/item/${it.id}">
+    const hay = itemSearchText(it);
+    return html`<a class="card item-card" href="#/item/${it.id}" data-search="${hay}" ${q && !hay.includes(q) ? 'hidden' : ''}>
+      ${it.image_url ? html`<img class="item-thumb" src="${it.image_url}" alt="" loading="lazy">` : ''}
       <div class="item-main">
         <div class="item-title">${it.name}</div>
         <div class="small muted">${it.category !== 'default' ? it.category : ''}${best ? html` · best at ${best.store}` : ''}${pendingN ? html` · <span class="pending-dot">${pendingN} pending</span>` : ''}</div>
@@ -181,7 +214,8 @@ function viewList() {
     </a>`;
   });
   const asOf = snap.generated_at ? html`<p class="small muted center">Prices as of ${ago(snap.generated_at)}</p>` : '';
-  return html`${installHint()}<section class="stack">${cards}</section>${asOf}`;
+  return html`${installHint()}${items.length > 4 ? searchBar() : ''}<section class="stack">${cards}</section>
+    <p class="muted center" id="search-empty" ${!q ? 'hidden' : ''}>No items match “${itemSearch}”.</p>${asOf}`;
 }
 
 function adviceHero(it) {
@@ -251,10 +285,14 @@ function breakdown(l) {
 }
 
 function otherRoutes(q) {
-  const others = (q.routes || []).slice(1);
+  const others = (q.routes || []).filter((r) => r.route !== q.landed.route);
   if (!others.length) return '';
-  return html`<details class="routes small"><summary>Other ways to get it (${others.length})</summary>
-    <ul class="plain">${others.map((r) => html`<li><details><summary class="row between"><span>${r.route === 'direct' ? 'Direct from the store' : r.route_label}</span><b>${r.hold ? 'on hold' : money(r.total)}</b></summary>${breakdown(r)}</details></li>`)}</ul>
+  return html`<details class="routes small" data-key="routes-${q.offer_id}"><summary>Other ways to get it (${others.length})</summary>
+    <ul class="plain">${others.map((r) => html`<li><details data-key="route-${q.offer_id}-${r.route}">
+      <summary class="row between"><span>${r.route === 'direct' ? 'Direct from the store' : r.route_label}${r.set_up === false ? html` <span class="chip tiny">not set up</span>` : ''}</span><b>${r.hold ? 'on hold' : money(r.total)}</b></summary>
+      ${breakdown(r)}
+      ${r.set_up === false && r.route !== 'direct' ? html`<div class="row gap small"><button type="button" class="link" data-action="use-forwarder" data-route="${r.route}">Set up this forwarder</button></div>` : ''}
+    </details></li>`)}</ul>
   </details>`;
 }
 
@@ -263,7 +301,7 @@ function quotesSection(it) {
   const rows = it.quotes.map((q, i) => {
     const l = q.landed;
     return html`<li class="quote ${i === 0 && q.in_stock ? 'best' : ''} ${q.in_stock ? '' : 'oos'}">
-      <details>
+      <details data-key="quote-${q.offer_id}">
         <summary>
           <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}
             <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div>
@@ -336,6 +374,7 @@ function viewItem(id) {
   return html`
     <div class="item-head">
       <a class="icon-btn" href="#/" aria-label="Back">${icon('back')}</a>
+      ${it.image_url ? html`<img class="item-head-thumb" src="${it.image_url}" alt="">` : ''}
       <div class="grow"><h1>${it.name}</h1><div class="small muted">${it.category}${it.target_price ? html` · target ${money(it.target_price)}` : ''}</div></div>
       <button class="icon-btn" type="button" data-action="edit-item" aria-label="Edit">${icon('edit')}</button>
     </div>
@@ -401,10 +440,11 @@ function viewAdd() {
       </div>
       <label>Product links <span class="muted small">(one per line: KSP, Ivory, Amazon, AliExpress…)</span>
         <textarea name="urls" rows="4" placeholder="https://ksp.co.il/web/item/…&#10;https://www.amazon.com/dp/…"></textarea></label>
+      <label class="check"><input type="checkbox" name="search_all" checked> Search all stores for this item too</label>
       <label class="check"><input type="checkbox" name="check" checked> Fetch prices right away (when online)</label>
       <p class="form-error" hidden></p>
       <button class="btn primary wide" type="submit">Start tracking</button>
-      <p class="small muted">Works offline too: the item is saved on this device and sent to the server when you're back online.</p>
+      <p class="small muted">Works offline too: the item is saved on this device and sent to the server when you're back online. Searching stores needs a connection and happens on the next sync.</p>
     </form>`;
 }
 
@@ -818,7 +858,7 @@ function ebaySearchUrl(query, condition) {
 }
 
 function addOfferSheet(it) {
-  openSheet(`Add a store · ${it.name}`, html`
+  const { close } = openSheet(`Add a store · ${it.name}`, html`
     <label>Product link<input name="url" type="url" placeholder="https://…" autocapitalize="off"></label>
     <p class="small muted center">or</p>
     <div class="row gap">
@@ -840,10 +880,24 @@ function addOfferSheet(it) {
     if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full product link (https://…) or type an eBay search');
     await mutate({ type: 'add_offer', itemId: it.id, body: { url, shipping: numOrNull(v.shipping), shipping_currency: v.shipping_currency || null, local_shipping: numOrNull(v.local_shipping), regex: v.regex || null } });
     toast(query ? 'eBay search added' : 'Store added');
-  }, { submitLabel: 'Add store' });
+  }, { submitLabel: 'Add store', extra: html`<button class="btn" type="button" id="search-all-stores" ${state.online ? '' : 'disabled'}>Search all stores</button>` });
+  const searchBtn = document.getElementById('search-all-stores');
+  if (searchBtn) searchBtn.onclick = async () => {
+    searchBtn.disabled = true;
+    toast('Searching stores for this item…', { timeout: 3000 });
+    try {
+      const before = it.offers.length;
+      const res = await online('POST', `api/items/${it.id}/search`, { query: it.name });
+      toast(`${res.offers.length - before} store(s) added`);
+      close();
+    } catch (e) {
+      toast(`Could not search stores: ${e.message}`, { timeout: 7000 });
+      searchBtn.disabled = false;
+    }
+  };
 }
 
-function forwarderSheet() {
+function forwarderSheet(preset) {
   const services = (state.snapshot.forwarders && state.snapshot.forwarders.services) || [];
   if (!services.length) { toast('Sync once to load the forwarders'); return; }
   const whOptions = (svc) => svc.warehouses.map((w) => html`<option value="${w.code}">${w.code} · ${w.location}</option>`);
@@ -852,8 +906,8 @@ function forwarderSheet() {
     const checked = (svc.verified || []).length ? ` Checked against the service's terms: ${svc.verified.join('; ')}.` : '';
     return `${svc.notes ? `${svc.notes} ` : ''}Rates: ${r}.${checked}`;
   };
-  const { form } = openSheet('Set up a package forwarder', html`
-    <label>Service<select name="forwarder" id="fwd-service">${services.map((f) => html`<option value="${f.key}">${f.name}</option>`)}</select></label>
+  const { form } = openSheet(preset ? `Set up ${services.find((f) => f.key === preset.forwarder).name}` : 'Set up a package forwarder', html`
+    <label>Service<select name="forwarder" id="fwd-service" ${preset ? 'disabled' : ''}>${services.map((f) => html`<option value="${f.key}" ${preset && f.key === preset.forwarder ? 'selected' : ''}>${f.name}</option>`)}</select></label>
     <p class="small muted" id="fwd-about"></p>
     <label>Warehouse<select name="warehouse" id="fwd-wh"></select></label>
     <label id="fwd-address">Your address there <span class="small muted">(exactly as the service shows it)</span>
@@ -864,17 +918,20 @@ function forwarderSheet() {
     </div>
     <p class="small muted">Have more than one address (e.g. US and UK)? Add each warehouse separately.</p>`,
   async (v) => {
-    const svc = services.find((f) => f.key === v.forwarder);
+    const forwarder = preset ? preset.forwarder : v.forwarder;
+    const svc = services.find((f) => f.key === forwarder);
     const address = (v.address || '').trim();
     if (svc.needs_address && !address) throw new Error(`Enter the address ${svc.name} gave you`);
     const tax = numOrNull(v.sales_tax);
-    await mutate({ type: 'save_forwarder', body: { forwarder: v.forwarder, warehouse: v.warehouse, address, suite: (v.suite || '').trim(), sales_tax: tax == null ? null : tax / 100 } });
+    await mutate({ type: 'save_forwarder', body: { forwarder, warehouse: v.warehouse, address, suite: (v.suite || '').trim(), sales_tax: tax == null ? null : tax / 100 } });
     toast(`${svc.name} ${v.warehouse} saved`);
   });
+  if (preset) form.querySelector('#fwd-service').value = preset.forwarder;
   const sel = form.querySelector('#fwd-service');
   const update = () => {
     const svc = services.find((f) => f.key === sel.value);
     form.querySelector('#fwd-wh').innerHTML = str(whOptions(svc));
+    if (preset && preset.warehouse) form.querySelector('#fwd-wh').value = preset.warehouse;
     form.querySelector('#fwd-about').textContent = describe(svc);
     form.querySelector('#fwd-address').hidden = !svc.needs_address;
     form.querySelector('#fwd-suite').hidden = !svc.needs_address;
@@ -906,13 +963,17 @@ function editItemSheet(it) {
       <label class="grow">Box size (cm)<input name="dims" value="${it.dims ?? ''}" placeholder="30x20x10" autocapitalize="off"></label>
     </div>
     <p class="small muted">Weight and size set what package forwarders charge for shipping. Leave them empty to read them from the store pages.</p>
+    <label>Picture <span class="small muted">(read automatically from the store pages; paste one to override)</span>
+      <input name="image_url" type="url" value="${it.image_url ?? ''}" placeholder="https://…" autocapitalize="off"></label>
     <label class="check"><input type="checkbox" name="notify" ${it.muted ? '' : 'checked'}> Notifications about this item</label>`,
   async (v) => {
     const dims = v.dims.trim();
     if (dims && !/^\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?$/i.test(dims)) throw new Error('Box size looks like 30x20x10');
+    const image_url = v.image_url.trim();
+    if (image_url && !/^https?:\/\//i.test(image_url)) throw new Error('Picture link looks like https://…');
     await mutate({ type: 'update_item', itemId: it.id, body: {
       category: v.category, target_price: v.target_price.trim() === '' ? '' : numOrNull(v.target_price),
-      weight_kg: v.weight_kg.trim() === '' ? '' : numOrNull(v.weight_kg), dims, muted: v.notify !== 'on' } });
+      weight_kg: v.weight_kg.trim() === '' ? '' : numOrNull(v.weight_kg), dims, image_url, muted: v.notify !== 'on' } });
   }, { extra: html`<button class="btn danger" type="button" id="del-item">Stop tracking</button>` });
   form.querySelector('#del-item').onclick = async () => {
     if (!confirm(`Stop tracking “${it.name}” and delete its price history?`)) return;
@@ -954,11 +1015,23 @@ async function onClick(ev) {
   const it = currentItem();
   switch (action) {
     case 'sync': sync(); break;
+    case 'clear-search': {
+      itemSearch = '';
+      const input = document.getElementById('item-search');
+      if (input) input.value = '';
+      filterItemCards();
+      break;
+    }
     case 'log-price': if (it) logPriceSheet(it); break;
     case 'add-offer': if (it) addOfferSheet(it); break;
     case 'edit-item': if (it) editItemSheet(it); break;
     case 'check': if (it) checkPrices(it); break;
     case 'add-forwarder': forwarderSheet(); break;
+    case 'use-forwarder': {
+      const [forwarder, warehouse] = (el.dataset.route || '').split(':');
+      if (forwarder && warehouse) forwarderSheet({ forwarder, warehouse });
+      break;
+    }
     case 'specs-source': if (it) specsSourceSheet(it); break;
     case 'specs-confirm':
       if (it) {
@@ -1031,7 +1104,7 @@ async function onSubmit(ev) {
       if (bad) throw new Error(`Not a link: ${bad}`);
       const existing = state.snapshot.items.find((i) => i.name.toLowerCase() === name.toLowerCase());
       const itemId = existing ? existing.id : `tmp-${uid()}`;
-      await mutate({ type: 'create_item', itemId, body: { name, category: v.category, target_price: numOrNull(v.target_price), urls, check: v.check === 'on' } });
+      await mutate({ type: 'create_item', itemId, body: { name, category: v.category, target_price: numOrNull(v.target_price), urls, check: v.check === 'on', search_all_stores: v.search_all === 'on' } });
       form.reset();
       lastHash = null;
       location.hash = `#/item/${itemId}`;
@@ -1167,7 +1240,10 @@ on('failed', ({ op, error }) => toast(`Server rejected “${describeOp(op)}”: 
 window.addEventListener('hashchange', () => render());
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
-document.addEventListener('input', (ev) => { const f = ev.target.closest('#view form'); if (f && f.id !== 'add-form') f.dataset.dirty = '1'; });
+document.addEventListener('input', (ev) => {
+  const f = ev.target.closest('#view form'); if (f && f.id !== 'add-form') f.dataset.dirty = '1';
+  if (ev.target.id === 'item-search') { itemSearch = ev.target.value; filterItemCards(); }
+});
 document.addEventListener('change', (ev) => {
   if (ev.target.id === 'store-pick') { storesPage.selected = ev.target.value; render({ force: true }); }
   if (ev.target.id === 'source-format') {

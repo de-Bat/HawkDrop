@@ -140,10 +140,20 @@ async function api(method, path, body) {
   assert.equal(fwd.accounts.length, 1);
   assert.equal(fwd.accounts[0].sales_tax_source, 'DE address');
   await page.goto(BASE + `/#/item/${demo.id}`);
-  await page.locator('.quote', { hasText: 'Amazon.com' }).locator('summary').first().click();
-  await page.getByText('Other ways to get it').first().waitFor();
+  const amazonQuote = page.locator('.quote', { hasText: 'Amazon.com' }).first();
+  await amazonQuote.locator('summary').first().click();
+  await amazonQuote.getByText('Other ways to get it').waitFor();
   await shot('08-routes');
   step('online: forwarder synced, item shows the other routes');
+
+  // every forwarder that could ship this item shows up, not just the one you've set up
+  await amazonQuote.getByText(/Other ways to get it \(\d+\)/).click();
+  const suggestion = amazonQuote.locator('.routes li', { hasText: 'not set up' }).first();
+  await suggestion.locator('summary').click();
+  await suggestion.getByRole('button', { name: 'Set up this forwarder' }).click();
+  await page.getByRole('heading', { name: /^Set up / }).waitFor();
+  await page.getByRole('button', { name: 'Close' }).click();
+  step('online: capable-but-unset-up forwarders are offered too');
   await page.getByText('Weight & size').waitFor();
 
   // 11. change a customs rule and notification preferences offline, then sync

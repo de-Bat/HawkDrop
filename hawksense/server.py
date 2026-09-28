@@ -49,7 +49,7 @@ SECURITY_HEADERS = {
     # the access token can be in the page URL - never leak it to store sites via Referer
     "Referrer-Policy": "no-referrer",
 }
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
        "connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
        "frame-ancestors 'none'; form-action 'self'")
 
@@ -220,9 +220,22 @@ class Api:
                     t.add_offer(item, url.strip())
                 except ValueError as exc:
                     raise ApiError(400, f"{url.strip()[:80]}: {exc}") from None
+        if body.get("search_all_stores"):
+            # adding the offers is instant (no network); prices for them arrive on the next check,
+            # scheduled or manual, so creating the item never blocks on fetching a dozen store pages
+            t.search_all_stores(item, name)
         if body.get("check") and body.get("urls"):
             t.check(item)
         return api.item_detail(t, t.db.get_item(item.id))
+
+    @staticmethod
+    @route("POST", r"/api/items/(\d+)/search")
+    def search_stores(t, body, query, item_id):
+        item = _item(t, item_id)
+        added = t.search_all_stores(item, _str(body, "query") or item.name)
+        if added and body.get("check", True):
+            t.check(item)
+        return api.item_detail(t, item)
 
     @staticmethod
     @route("PATCH", r"/api/items/(\d+)")
@@ -234,9 +247,12 @@ class Api:
                 dims = "x".join(f"{d:g}" for d in parse_dims(dims))
             except ValueError as exc:
                 raise ApiError(400, str(exc)) from None
+        image_url = _str(body, "image_url")
+        if image_url and not re.match(r"^https?://", image_url, re.I):
+            raise ApiError(400, "'image_url' must be a http(s) link")
         t.db.update_item(item, _str(body, "category"), _num(body, "target_price"), _num(body, "weight_kg"), dims,
-                         muted=body["muted"] is True if "muted" in body else None)
-        for col in ("target_price", "weight_kg", "dims"):
+                         muted=body["muted"] is True if "muted" in body else None, image_url=image_url)
+        for col in ("target_price", "weight_kg", "dims", "image_url"):
             if col in body and body[col] in (None, ""):
                 t.db.clear_item_field(item, col)
         return api.item_detail(t, t.db.get_item(item.id))

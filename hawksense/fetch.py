@@ -43,6 +43,7 @@ class Extraction:
     method: str = ""
     url: str | None = None  # the listing actually priced (e.g. the cheapest eBay search result)
     specs: object | None = None  # hawksense.specs.Specs read from the same page, if any
+    image: str | None = None  # a picture of the product, if the page named one
 
 
 def fetch_html(url: str, timeout: float = 20.0) -> str:
@@ -128,6 +129,17 @@ def _is_type(node: dict, name: str) -> bool:
     return t == name or (isinstance(t, list) and name in t)
 
 
+def _image_of(node: dict) -> str | None:
+    img = node.get("image")
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, dict):
+        img = img.get("url") or img.get("contentUrl")
+    if isinstance(img, str) and img.strip():
+        return img.strip()
+    return None
+
+
 def _from_offer(offer: dict) -> Extraction | None:
     price = offer.get("price")
     if price is None and "priceSpecification" in offer:
@@ -168,6 +180,7 @@ def extract_json_ld(page: str) -> Extraction | None:
             if found:
                 best = min(found, key=lambda x: (not x.in_stock, x.price))
                 best.title = node.get("name")
+                best.image = _image_of(node)
                 return best
     return None
 
@@ -190,12 +203,13 @@ def extract_meta(page: str) -> Extraction | None:
         amount = _meta(page, "property", name)
         if amount and (value := parse_number(amount)):
             currency = _meta(page, "property", name.replace("amount", "currency"))
-            return Extraction(value, currency, method="meta")
+            return Extraction(value, currency, method="meta", image=_meta(page, "property", "og:image"))
     m = re.search(r'itemprop=["\']price["\'][^>]*content=["\']([^"\']+)["\']', page, re.I) or \
         re.search(r'content=["\']([^"\']+)["\'][^>]*itemprop=["\']price["\']', page, re.I)
     if m and (value := parse_number(m.group(1))):
         cur = re.search(r'itemprop=["\']priceCurrency["\'][^>]*content=["\']([A-Z]{3})["\']', page, re.I)
-        return Extraction(value, cur.group(1) if cur else None, method="microdata")
+        return Extraction(value, cur.group(1) if cur else None, method="microdata",
+                          image=_meta(page, "property", "og:image"))
     return None
 
 
@@ -249,13 +263,16 @@ def extract_price(page: str, url: str = "", price_regex: str | None = None) -> E
     if price_regex:
         m = re.search(price_regex, page, re.S)
         if m and (value := parse_number(m.group(1))):
-            return Extraction(value, guess_currency(m.group(0)), method="custom-regex")
+            return Extraction(value, guess_currency(m.group(0)), method="custom-regex", image=_meta(page, "property", "og:image"))
     for extractor in (extract_json_ld, extract_meta):
         result = extractor(page)
         if result:
+            if not result.image:
+                result.image = _meta(page, "property", "og:image")
             return result
     result = extract_store_specific(page, url)
     if result:
+        result.image = _meta(page, "property", "og:image")
         return result
     if _blocked(page):
         raise FetchError("the store blocked the request (captcha) - record the price manually with `hawksense price`")

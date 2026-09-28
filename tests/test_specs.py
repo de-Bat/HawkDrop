@@ -149,10 +149,11 @@ class TrackerSpecsTest(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
-    def fake_fetch(self, pages):
+    def fake_fetch(self, pages, images=None):
         def fetch(url, regex=None):
-            ex = Extraction(100.0, None)
-            ex.specs = extract_specs(next(p for k, p in pages.items() if k in url))
+            key = next(k for k in pages if k in url)
+            ex = Extraction(100.0, None, image=(images or {}).get(key))
+            ex.specs = extract_specs(pages[key])
             return ex
         return mock.patch.object(tracker_mod, "fetch_price", side_effect=fetch)
 
@@ -165,6 +166,15 @@ class TrackerSpecsTest(unittest.TestCase):
         self.assertEqual(item.dims, "26x22x9")
         self.assertEqual(item.specs_status, "verified")
         self.assertEqual(len(self.db.spec_observations(item)), 2)
+
+    def test_check_saves_the_first_picture_found_and_keeps_it(self):
+        with self.fake_fetch({"amazon": AMAZON, "ksp": KSP}, images={"amazon": "https://cdn.example.com/a.jpg"}):
+            self.t.check(self.item)
+        item = self.db.get_item(self.item.id)
+        self.assertEqual(item.image_url, "https://cdn.example.com/a.jpg")
+        with self.fake_fetch({"amazon": AMAZON, "ksp": KSP}, images={"amazon": "https://cdn.example.com/b.jpg"}):
+            self.t.check(self.db.get_item(self.item.id))
+        self.assertEqual(self.db.get_item(self.item.id).image_url, "https://cdn.example.com/a.jpg")  # not replaced
 
     def test_manual_weight_is_kept(self):
         self.db.update_item(self.item, weight_kg=3.0)

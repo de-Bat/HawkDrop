@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 from urllib.parse import urlparse
 from datetime import date, datetime, timedelta, timezone
 
+from hawksense import ebay
 from hawksense.currency import FX
 from hawksense.db import Database, Item, Offer, PricePoint
 from hawksense.ebay import EbaySource, is_ebay
@@ -16,7 +17,7 @@ from hawksense.forwarders import FORWARDERS, Account, Forwarder, Route, parse_di
 from hawksense.landed import Destination, LandedCost, forwarded_cost, landed_cost
 from hawksense.notify import Notifier
 from hawksense.specs import Consensus, Observation, consensus, extract_specs
-from hawksense.stores import StoreProfile, resolve_store, with_overrides
+from hawksense.stores import StoreProfile, resolve_store, search_url, stores_with_search, with_overrides
 
 STALE_AFTER_DAYS = 14
 
@@ -114,6 +115,32 @@ class Tracker:
         return self.db.add_offer(item, store.key, url_or_store if is_url else "", shipping,
                                  shipping_currency, price_regex, local_shipping)
 
+    def search_all_stores(self, item: Item, query: str | None = None) -> list[Offer]:
+        """Add a trackable search offer at every store that supports one, for stores not already tracked.
+
+        Best effort, like eBay's own search offers: a store may change its markup or block the request,
+        in which case its check simply fails (log the price by hand).
+        """
+        query = (query or item.name).strip()
+        if not query:
+            return []
+        have = {self.store_for(o).key for o in self.db.offers(item)}
+        added = []
+        for store in stores_with_search():
+            if store.key in have:
+                continue
+            url = search_url(with_overrides(store, self.store_overrides.get(store.key, {})), query)
+            if url:
+                added.append(self.add_offer(item, url))
+                have.add(store.key)
+        for site in ebay.SITES:
+            key = resolve_store(site).key
+            if key in have:
+                continue
+            added.append(self.add_offer(item, ebay.search_url(query, site, None)))
+            have.add(key)
+        return added
+
     # ---- forwarders ---------------------------------------------------------------------
     def accounts(self) -> list[Account]:
         if self._accounts is None:
@@ -178,6 +205,9 @@ class Tracker:
             ex.currency = (ex.currency or store.currency).upper()
             self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method)
             self._save_specs(item, store.name, ex.url or offer.url, ex.specs)
+            if ex.image and not item.image_url:
+                self.db.update_item(item, image_url=ex.image)
+                item.image_url = ex.image
             results.append(CheckResult(offer, store, ex))
         if any(r.extraction for r in results):
             self.update_specs(item)

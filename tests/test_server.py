@@ -73,6 +73,24 @@ class ApiTest(ServerTest):
         self.assertEqual(self.call("DELETE", f"/api/items/{item['id']}")[0], 200)  # replay is harmless
         self.assertEqual(self.call("GET", f"/api/items/{item['id']}")[0], 404)
 
+    def test_item_picture(self):
+        _, item = self.call("POST", "/api/items", {"name": "Camera"})
+        self.assertIsNone(item["image_url"])
+        status, err = self.call("PATCH", f"/api/items/{item['id']}", {"image_url": "not a url"})
+        self.assertEqual(status, 400)
+        _, patched = self.call("PATCH", f"/api/items/{item['id']}", {"image_url": "https://cdn.example.com/x.jpg"})
+        self.assertEqual(patched["image_url"], "https://cdn.example.com/x.jpg")
+        _, cleared = self.call("PATCH", f"/api/items/{item['id']}", {"image_url": ""})
+        self.assertIsNone(cleared["image_url"])
+
+    def test_search_all_stores(self):
+        _, item = self.call("POST", "/api/items", {"name": "Sony WH-1000XM5", "search_all_stores": True})
+        self.assertGreater(len(item["offers"]), 0)
+        self.assertTrue(all(o["url"] for o in item["offers"]))
+        # explicit search on an existing item skips stores it already has
+        _, again = self.call("POST", f"/api/items/{item['id']}/search", {"check": False})
+        self.assertEqual(len(again["offers"]), len(item["offers"]))
+
     def test_validation(self):
         self.assertEqual(self.call("POST", "/api/items", {"name": ""})[0], 400)
         _, item = self.call("POST", "/api/items", {"name": "X"})

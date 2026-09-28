@@ -4,6 +4,7 @@ from hawksense.fetch import FetchError, extract_price, parse_number
 
 JSON_LD = """<html><head><script type="application/ld+json">
 {"@context":"https://schema.org","@graph":[{"@type":"Product","name":"Headphones",
+ "image":["https://cdn.example.com/headphones.jpg"],
  "offers":[{"@type":"Offer","price":"1,299.90","priceCurrency":"ILS",
             "availability":"https://schema.org/InStock",
             "shippingDetails":{"shippingRate":{"value":"29","currency":"ILS"}}},
@@ -26,6 +27,19 @@ class ExtractTest(unittest.TestCase):
         ex = extract_price(JSON_LD)
         self.assertEqual((ex.price, ex.currency, ex.in_stock, ex.shipping), (1299.90, "ILS", True, 29))
         self.assertEqual(ex.title, "Headphones")
+        self.assertEqual(ex.image, "https://cdn.example.com/headphones.jpg")
+
+    def test_meta_tags_read_the_image_too(self):
+        page = ('<meta property="product:price:amount" content="89.99">'
+                '<meta property="product:price:currency" content="EUR">'
+                '<meta property="og:image" content="https://cdn.example.com/p.jpg">')
+        self.assertEqual(extract_price(page).image, "https://cdn.example.com/p.jpg")
+
+    def test_og_image_used_as_a_fallback_when_json_ld_has_none(self):
+        page = ('<script type="application/ld+json">{"@type":"Product","offers":'
+                '{"@type":"AggregateOffer","lowPrice":"249","priceCurrency":"USD"}}</script>'
+                '<meta property="og:image" content="https://cdn.example.com/fallback.jpg">')
+        self.assertEqual(extract_price(page).image, "https://cdn.example.com/fallback.jpg")
 
     def test_aggregate_offer(self):
         page = ('<script type="application/ld+json">{"@type":"Product","offers":'

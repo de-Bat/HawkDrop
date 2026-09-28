@@ -595,10 +595,33 @@ function collectSettings(form) {
   return { changes, secret };
 }
 
+// ---- "needs attention" indicators -----------------------------------------------------------
+
+const dot = () => html`<i class="attn-dot" aria-hidden="true"></i>`;
+
+function settingsIssues() {
+  const out = { sections: {}, brokenChannels: [] };
+  const pending = (state.snapshot.rules && state.snapshot.rules.pending) || [];
+  if (pending.length) out.sections.rates = `${pending.length} rule change${pending.length > 1 ? 's' : ''} waiting for your review`;
+  const n = state.snapshot.notifications;
+  if (n && n.channels && n.events) {
+    const broken = n.channels.filter((c) => c.key !== 'inbox' && !c.configured
+      && n.events.some((e) => (n.subscriptions[e.key] || []).includes(c.key)));
+    if (broken.length) {
+      out.sections.notifications = `${broken.map((c) => c.name).join(', ')} needs setup to actually send alerts`;
+      out.brokenChannels = broken.map((c) => c.key);
+    }
+  }
+  return out;
+}
+
 const SETTINGS_PAGES = [
   ['notifications', 'Notifications', 'bell', () => {
     const n = state.snapshot.notifications;
-    const on = n ? n.channels.filter((c) => c.configured && c.key !== 'inbox').map((c) => c.name) : [];
+    if (!n) return '';
+    const broken = settingsIssues().sections.notifications;
+    if (broken) return broken;
+    const on = n.channels.filter((c) => c.configured && c.key !== 'inbox').map((c) => c.name);
     return on.length ? `${on.join(', ')} + app` : 'In the app only';
   }],
   ['forwarders', 'Package forwarders', 'box', () => {
@@ -624,8 +647,9 @@ const SETTINGS_PAGES = [
 ];
 
 function viewSettings() {
-  const rows = SETTINGS_PAGES.map(([key, title, ic, sub]) => html`<a class="settings-row" href="#/settings/${key}">
-      ${icon(ic)}<div class="grow"><b>${title}</b><div class="small muted">${sub()}</div></div>${icon('back', 'icon flip')}</a>`);
+  const issues = settingsIssues();
+  const rows = SETTINGS_PAGES.map(([key, title, ic, sub]) => html`<a class="settings-row ${issues.sections[key] ? 'needs-attention' : ''}" href="#/settings/${key}">
+      ${icon(ic)}<div class="grow"><b>${title}${issues.sections[key] ? dot() : ''}</b><div class="small muted">${sub()}</div></div>${icon('back', 'icon flip')}</a>`);
   return html`<h1 class="page-title">Settings</h1>
     <div class="row between card slim"><span>Sync</span>${statusPill()}</div>
     <nav class="card settings-nav">${rows}</nav>
@@ -695,12 +719,15 @@ function settingsPage(key) {
     <h1 class="grow">${(SETTINGS_PAGES.find((p) => p[0] === key) || [0, 'Settings'])[1]}</h1></div>`;
   const meta = state.snapshot.meta;
   switch (key) {
-    case 'notifications':
+    case 'notifications': {
+      const broken = settingsIssues().brokenChannels;
       return html`${back}${notifyCard()}
         <h2 class="section-title">Channels</h2>
         ${['telegram', 'whatsapp', 'ntfy', 'email', 'webhook'].map((k) => html`<details class="card fold" data-key="channel-${k}">
-          <summary><b>${(settingsSection(k) || { title: k }).title}</b> ${(settingsSection(k) || {}).configured ? html`<span class="badge buy">set up</span>` : html`<span class="badge muted">not set up</span>`}</summary>
+          <summary><b>${(settingsSection(k) || { title: k }).title}</b> ${(settingsSection(k) || {}).configured ? html`<span class="badge buy">set up</span>` : html`<span class="badge muted">not set up</span>`}${broken.includes(k) ? dot() : ''}</summary>
+          ${broken.includes(k) ? html`<p class="small warn-text">A price alert is subscribed to this channel, but it isn't set up yet - those alerts won't be delivered.</p>` : ''}
           ${sectionForm(k, { test: true })}</details>`)}`;
+    }
     case 'forwarders': return html`${back}${forwardersCard()}`;
     case 'rates': return html`${back}${rulesCard()}`;
     case 'checks': return html`${back}${sectionForm('checks')}${ruleSourcesCard()}`;
@@ -768,9 +795,15 @@ function renderBell() {
   document.getElementById('bell').innerHTML = str(html`${icon('bell')}${unread ? html`<i class="count">${unread > 9 ? '9+' : unread}</i>` : ''}`);
 }
 
+function renderSettingsDot() {
+  const dotEl = document.getElementById('settings-tab-dot');
+  if (dotEl) dotEl.hidden = Object.keys(settingsIssues().sections).length === 0;
+}
+
 function render({ force = false } = {}) {
   document.getElementById('status').innerHTML = str(statusPill());
   renderBell();
+  renderSettingsDot();
   const hash = location.hash || '#/';
   let route = ROUTES[0];
   let match = null;

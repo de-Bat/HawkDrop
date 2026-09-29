@@ -55,6 +55,23 @@ class AmazonSearchTest(unittest.TestCase):
         self.assertEqual(suggest_phrases("jbl line 670c", titles)[0], "JBL Live 670NC")
         self.assertEqual(suggest_phrases("jbl lvie 670nc", titles)[0], "JBL Live 670NC")
 
+    def test_search_offer_prices_the_cheapest_new_matching_listing(self):
+        import unittest.mock
+
+        from hawksense import amazon
+
+        page = "<html>" + CARD.format(asin="B000000001", title="Sony WH-1000XM5", price="$19.99") \
+            + CARD.format(asin="B000000002", title="JBL Live 670NC Renewed", price="$47.95").replace(
+                "<h2><span>Brand</span></h2>", "<h2><span>Amazon Renewed</span></h2>") \
+            + CARD.format(asin="B000000003", title="JBL Live 670NC Wireless", price="$129.95") + "x" * 6000
+        self.assertEqual(amazon.search_query("https://www.amazon.com/s?k=jbl+live+670"), ("jbl live 670", "amazon.com"))
+        self.assertIsNone(amazon.search_query("https://www.amazon.com/dp/B000000003"))
+        with unittest.mock.patch("hawksense.amazon.fetch_html", return_value=page):
+            ex = amazon.price_search_page("https://www.amazon.com/s?k=jbl+live+670")
+            self.assertEqual((ex.price, ex.url), (129.95, "https://www.amazon.com/dp/B000000003"))
+            with self.assertRaises(FetchError):  # nothing matches: an error, never a random product's price
+                amazon.price_search_page("https://www.amazon.com/s?k=bose+qc45")
+
 
 if __name__ == "__main__":
     unittest.main()

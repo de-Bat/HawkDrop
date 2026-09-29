@@ -147,6 +147,7 @@ class PricePoint:
     shipping: float | None
     in_stock: bool
     source: str
+    listing_url: str | None = None  # the listing actually priced, when the offer is a search page
 
 
 def now_utc() -> datetime:
@@ -191,6 +192,8 @@ class Database:
                 self.conn.execute("ALTER TABLE items ADD COLUMN weight_kg REAL")
             if "dims" not in item_cols:
                 self.conn.execute("ALTER TABLE items ADD COLUMN dims TEXT")
+            if "listing_url" not in cols:
+                self.conn.execute("ALTER TABLE prices ADD COLUMN listing_url TEXT")
             if "local_shipping" not in offer_cols:
                 self.conn.execute("ALTER TABLE offers ADD COLUMN local_shipping REAL")
             for col, decl in (("weight_source", "TEXT"), ("dims_source", "TEXT"), ("specs_status", "TEXT"),
@@ -331,14 +334,14 @@ class Database:
     # ---- prices ------------------------------------------------------------
     def add_price(self, offer: Offer, price: float, currency: str, shipping: float | None = None,
                   in_stock: bool = True, source: str = "manual", ts: datetime | None = None,
-                  client_id: str | None = None) -> bool:
+                  client_id: str | None = None, listing_url: str | None = None) -> bool:
         """Returns False when ``client_id`` was already recorded (a replayed offline entry)."""
         with self.conn:
             cur = self.conn.execute(
-                "INSERT OR IGNORE INTO prices (offer_id, ts, price, currency, shipping, in_stock, source, client_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO prices (offer_id, ts, price, currency, shipping, in_stock, source, client_id,"
+                " listing_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source,
-                 client_id),
+                 client_id, listing_url),
             )
         return cur.rowcount == 1
 
@@ -346,7 +349,7 @@ class Database:
         rows = self.conn.execute("SELECT * FROM prices WHERE offer_id = ? ORDER BY ts", (offer.id,))
         return [
             PricePoint(r["offer_id"], datetime.fromisoformat(r["ts"]), r["price"], r["currency"], r["shipping"],
-                       bool(r["in_stock"]), r["source"])
+                       bool(r["in_stock"]), r["source"], r["listing_url"])
             for r in rows
         ]
 

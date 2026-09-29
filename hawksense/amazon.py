@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html as html_lib
 import re
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 from hawksense.fetch import Extraction, FetchError, fetch_html, guess_currency, parse_number
 
@@ -87,3 +87,28 @@ def listing_from_url(url: str) -> Extraction:
     if ex.specs is None:
         ex.specs = extract_specs(page)
     return ex
+
+
+def search_query(url: str) -> tuple[str, str] | None:
+    """(query, site) when ``url`` is an Amazon search-results page, else None."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").removeprefix("www.")
+    if host not in SITES or not parsed.path.startswith("/s"):
+        return None
+    query = (parse_qs(parsed.query).get("k") or [""])[0].strip()
+    return (query, host) if query else None
+
+
+def price_search_page(url: str) -> Extraction:
+    """A search-page offer's price: the cheapest *new* listing whose title matches the whole query - never just
+    the first price on the page, which is whatever product Amazon happens to rank first."""
+    from hawksense.api import matches_query  # the same relevance rule the product picker uses
+
+    query, site = search_query(url)
+    found = [e for e in parse_search_candidates(fetch_html(url), site, limit=60)
+             if e.condition is None and matches_query(query, e.title)]
+    if not found:
+        raise FetchError(f"no new listing on {site} matches \u201c{query}\u201d")
+    best = min(found, key=lambda e: e.price)
+    best.method = "amazon-search-match"
+    return best

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields
 from urllib.parse import urlparse
 from datetime import date, datetime, timedelta, timezone
 
-from hawksense import ebay
+from hawksense import amazon, ebay
 from hawksense.currency import FX
 from hawksense.db import Database, Item, Offer, PricePoint
 from hawksense.ebay import EbaySource, is_ebay
@@ -200,6 +200,8 @@ class Tracker:
             try:
                 if is_ebay(offer.url):
                     ex = self.ebay.fetch(offer.url, offer.price_regex)
+                elif amazon.search_query(offer.url) and not offer.price_regex:
+                    ex = amazon.price_search_page(offer.url)
                 else:
                     ex = fetch_price(offer.url, offer.price_regex)
             except FetchError as exc:
@@ -209,7 +211,9 @@ class Tracker:
                 results.append(CheckResult(offer, store, error=f"{store.name}: {type(exc).__name__}: {exc}"))
                 continue
             ex.currency = (ex.currency or store.currency).upper()
-            self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method)
+            listing = ex.url if ex.url and ex.url != offer.url else None
+            self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method,
+                              listing_url=listing)
             self._save_specs(item, store.name, ex.url or offer.url, ex.specs)
             if ex.image and not item.image_url:
                 self.db.update_item(item, image_url=ex.image)

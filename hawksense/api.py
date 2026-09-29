@@ -161,7 +161,7 @@ def landed(lc: LandedCost) -> dict:
 def quote(q: Quote, all_routes: list[LandedCost] | None = None) -> dict:
     return {
         "offer_id": q.offer.id, "store_key": q.store.key, "store": q.store.name, "country": q.store.country,
-        "url": q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
+        "url": q.point.listing_url or q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
         "seen": q.point.ts.isoformat(), "source": q.point.source,
         "landed": landed(q.landed),
         # every capable forwarder, including ones you haven't set up yet (marked "set_up": false)

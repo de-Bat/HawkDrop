@@ -167,7 +167,7 @@ async function productPickerSheet(query, onPick) {
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">
       ${r.image ? html`<img class="item-thumb" src="${r.image}" alt="" loading="lazy" referrerpolicy="no-referrer">` : html`<div class="item-thumb"></div>`}
       <div class="grow"><div class="pick-title">${r.title || r.store}</div>
-        <div class="small muted">${r.store}${shippingNote(r)}</div></div>
+        <div class="small muted">${r.store}${shippingNote(r)}${r.condition ? html` · <span class="chip tiny warn">${r.condition}</span>` : ''}</div></div>
       <div class="pick-price">${money(r.price, r.currency)}</div>
     </button></li>`);
   body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>${failed}`);
@@ -179,7 +179,7 @@ async function productPickerSheet(query, onPick) {
 function pickedChip(c, { onRemove } = {}) {
   return html`<div class="card picked-chip">
     ${c.image ? html`<img class="item-thumb" src="${c.image}" alt="" loading="lazy" referrerpolicy="no-referrer">` : html`<div class="item-thumb"></div>`}
-    <div class="grow"><b>${c.title || c.store}</b><div class="small muted">${c.store} · ${money(c.price, c.currency)}${shippingNote(c)}</div></div>
+    <div class="grow"><b>${c.title || c.store}</b><div class="small muted">${c.store} · ${money(c.price, c.currency)}${shippingNote(c)}${c.condition ? html` · <span class="chip tiny warn">${c.condition}</span>` : ''}</div></div>
     ${onRemove ? html`<button type="button" class="icon-btn" data-action="${onRemove}" aria-label="Remove selection">${icon('close')}</button>` : ''}
   </div>`;
 }

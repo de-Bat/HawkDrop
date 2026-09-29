@@ -18,6 +18,13 @@ _ALT = re.compile(r'\salt="([^"]*)"')
 _H2 = re.compile(r"<h2[^>]*>(.*?)</h2>", re.S)
 _TAGS = re.compile(r"<[^>]+>")
 CARD_MAX = 20000
+_USED = re.compile(r"\b(renewed|refurbished|pre-?owned|open[- ]box|certified refurb|used - \\w+)", re.I)
+
+
+def condition_of(text: str) -> str | None:
+    """"Renewed" / "Refurbished" / ... when the card says the item is not new."""
+    m = _USED.search(text)
+    return m.group(1).replace("-", " ").capitalize() if m else None
 
 
 def search_url(query: str, site: str = "amazon.com") -> str:
@@ -43,7 +50,8 @@ def parse_search_candidates(page: str, site: str = "amazon.com", limit: int = 20
             title = html_lib.unescape(_TAGS.sub(" ", h2.group(1))).strip()
         found.append(Extraction(value, guess_currency(text) or SITES.get(site), True, None, title or None,
                                 "amazon-search-page", url=f"https://www.{site}/dp/{asin.group(1)}",
-                                image=html_lib.unescape(src.group(1)) if src else None))
+                                image=html_lib.unescape(src.group(1)) if src else None,
+                                condition=condition_of(_TAGS.sub(" ", card))))
     if not found:
         if re.search(r"captcha|robot check|automated access", page, re.I) or len(page) < 5000:
             raise FetchError(f"Amazon ({site}) blocked the request")

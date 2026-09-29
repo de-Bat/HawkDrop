@@ -202,7 +202,8 @@ class EbayApi:
             ship = _shipping(s.get("shippingOptions"), currency)
             found.append(Extraction(price, currency, True, ship, s.get("title"), "ebay-api search",
                                     url=s.get("itemWebUrl"), image=(s.get("image") or {}).get("imageUrl")
-                                    or ((s.get("thumbnailImages") or [{}])[0]).get("imageUrl")))
+                                    or ((s.get("thumbnailImages") or [{}])[0]).get("imageUrl"),
+                                    condition=_condition(s.get("condition"))))
         return _ranked(found)[:limit]
 
 
@@ -230,6 +231,15 @@ _TITLE_RE = re.compile(r'class="[^"]*s-(?:item|card)__title[^"]*"[^>]*>(?:<span[
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.S)
 _IMG_ATTR_RE = re.compile(r'\b(?:data-defer-load|data-src|data-lazy-src|src)="(https?://[^"]+)"')
 _IMG_SIZE_RE = re.compile(r"/s-l\d+\.")
+
+
+_USED_RE = re.compile(r"\b(pre-?owned|used|refurbished|renewed|open box|for parts|seller refurbished|certified refurbished)\b", re.I)
+
+
+def _condition(text: str | None) -> str | None:
+    """The listing's condition when it is not new (eBay says "New", "Pre-Owned", "Open box"...)."""
+    m = _USED_RE.search(text or "")
+    return m.group(1).replace("-", " ").capitalize() if m else None
 
 
 def _card_image(block: str) -> str | None:
@@ -291,7 +301,7 @@ def parse_search_candidates(page: str, currency: str | None = None, limit: int =
         image = _card_image(block)
         found.append(Extraction(value, guess_currency(price_text) or currency, True, shipping,
                                 _text(title.group(1)) if title else None, "ebay-search-page", url=url,
-                                image=image))
+                                image=image, condition=_condition(_text(block))))
     if not found:
         if re.search(r"captcha|robot|pardon our interruption", page, re.I):
             raise FetchError(_BLOCKED_MSG)

@@ -44,6 +44,7 @@ class Extraction:
     url: str | None = None  # the listing actually priced (e.g. the cheapest eBay search result)
     specs: object | None = None  # hawksense.specs.Specs read from the same page, if any
     image: str | None = None  # a picture of the product, if the page named one
+    condition: str | None = None  # "Renewed", "Pre-owned"... only when the listing is not new
 
 
 def fetch_html(url: str, timeout: float = 20.0, extra_headers: dict | None = None) -> str:

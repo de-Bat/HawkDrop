@@ -62,7 +62,7 @@ def _site_label(site: str) -> str:
 def search_candidate(ex: Extraction, site: str = "ebay.com") -> dict:
     return {"title": ex.title, "price": _r(ex.price), "currency": ex.currency, "url": ex.url,
             "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock,
-            "store": _site_label(site)}
+            "condition": ex.condition, "store": _site_label(site)}
 
 
 def forwarder(f: Forwarder) -> dict:

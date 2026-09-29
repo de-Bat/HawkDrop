@@ -19,6 +19,12 @@ class AmazonSearchTest(unittest.TestCase):
         self.assertEqual(found[0].url, "https://www.amazon.com/dp/B0DGQVFDVD")
         self.assertTrue(found[0].image.endswith("x.jpg"))
 
+    def test_renewed_listings_carry_their_condition(self):
+        page = PAGE.replace("Edifier W820NB", "Edifier W820NB").replace(
+            '<h2><span>Brand</span></h2><span class="a-offscreen">$89.99', '<h2><span>Amazon Renewed</span></h2><span class="a-offscreen">$89.99')
+        found = parse_search_candidates(page, "amazon.com")
+        self.assertEqual([e.condition for e in found], [None, "Renewed"])
+
     def test_blocked_page_raises(self):
         with self.assertRaises(FetchError):
             parse_search_candidates("<html>tiny</html>", "amazon.co.uk")

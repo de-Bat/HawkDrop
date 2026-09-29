@@ -53,6 +53,41 @@ def matches_query(query: str, title: str | None) -> bool:
     return True
 
 
+_CUT_WORDS = {"wireless", "bluetooth", "over-ear", "on-ear", "in-ear", "headphones", "headphone", "earbuds", "noise",
+              "true", "with", "for", "cancelling", "canceling", "black", "white", "blue", "silver", "gray", "grey"}
+
+
+def _short_name(title: str) -> str:
+    head = re.split(r"\s[-–|]\s|,|\||\(", title)[0].split()
+    out = []
+    for i, w in enumerate(head):
+        if i >= 2 and w.lower() in _CUT_WORDS:
+            break
+        out.append(w)
+    return " ".join(out[:6])
+
+
+def suggest_phrases(query: str, titles: list[str | None], limit: int = 5) -> list[str]:
+    """"Did you mean" phrases: the product names of near-miss listings (they share most of the query but not
+    all of it, e.g. a neighbouring model), most common first."""
+    toks = re.findall(r"[a-z0-9]+", query.lower())
+    if not toks:
+        return []
+    need = (len(toks) + 1) // 2
+    counts: dict[str, list] = {}
+    for title in titles:
+        if not title or matches_query(query, title):
+            continue
+        text = re.sub(r"[^a-z0-9]+", "", title.lower())
+        hit = sum(all(p in text for p in re.findall(r"[a-z]+|\d+", t)) for t in toks)
+        name = _short_name(title)
+        if hit >= need and name and name.lower() != query.lower():
+            entry = counts.setdefault(re.sub(r"[^a-z0-9]+", "", name.lower()), [name, 0, hit])
+            entry[1] += 1
+    ranked = sorted(counts.values(), key=lambda e: (-e[2], -e[1], len(e[0])))
+    return [e[0] for e in ranked[:limit]]
+
+
 def _site_label(site: str) -> str:
     brand, _, tld = site.partition(".")
     name = "eBay" if brand == "ebay" else brand.capitalize()

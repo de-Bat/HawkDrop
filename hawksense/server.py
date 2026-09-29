@@ -213,7 +213,7 @@ class Api:
             raise ApiError(400, "'condition' must be new, used or any")
         cond = None if condition in (None, "any") else condition
         sites = list(ebay.SITES) + list(amazon.SITES)
-        results, errors = [], []
+        results, errors, titles = [], [], []
 
         def one(site):
             if site in amazon.SITES:
@@ -226,11 +226,12 @@ class Api:
             for site, fut in zip(sites, futures):
                 try:
                     for ex in fut.result()[1]:
+                        titles.append(ex.title)
                         if api.matches_query(q, ex.title):
                             results.append(api.search_candidate(ex, site))
                 except Exception as exc:  # noqa: BLE001 - any single-store failure is reported, not raised
                     errors.append({"store": site, "error": str(exc)})
-        return {"results": results, "errors": errors}
+        return {"results": results, "errors": errors, "suggestions": api.suggest_phrases(q, titles)}
 
     @staticmethod
     @route("POST", r"/api/items")

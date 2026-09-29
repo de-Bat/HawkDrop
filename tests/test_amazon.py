@@ -39,6 +39,14 @@ class AmazonSearchTest(unittest.TestCase):
         self.assertFalse(matches_query(q, "JBL MA710 7.2 Channel AV Receiver"))
         self.assertFalse(matches_query(q, None))
 
+    def test_did_you_mean_suggests_neighbouring_models(self):
+        from hawksense.api import suggest_phrases
+
+        titles = ["JBL Live 770NC - Wireless Over-Ear Headphones", "JBL Live 770NC Wireless, Black",
+                  "JBL Live 680NC Wireless On-Ear Headphones", "JBL MA710 7.2 Channel AV Receiver", None,
+                  "JBL Live 670NC Wireless On-Ear Headphones"]
+        self.assertEqual(suggest_phrases("jbl live nc670", titles), ["JBL Live 770NC", "JBL Live 680NC"])
+
 
 if __name__ == "__main__":
     unittest.main()

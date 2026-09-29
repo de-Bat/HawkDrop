@@ -145,23 +145,33 @@ async function productPickerSheet(query, onPick) {
   const body = () => panel.querySelector('.sheet-body');
   let results;
   let errors = [];
+  let suggestions = [];
   try {
-    ({ results, errors = [] } = await online('POST', 'api/search', { query }));
+    ({ results, errors = [], suggestions = [] } = await online('POST', 'api/search', { query }));
   } catch (e) {
     body().innerHTML = str(failedNote('Search failed', e.message));
     return;
   }
   if (!panel.isConnected) return; // closed while the search was in flight
   // stores that failed are noted, never fatal: the ones that answered still show
+  // "did you mean": near-miss product names from the stores; tapping one re-runs the search with that phrase
+  const didYouMean = suggestions.length
+    ? html`<div class="did-you-mean"><span class="small muted">${results.length ? 'Not it? Did you mean' : 'Did you mean'}</span>
+        <div class="chips">${suggestions.map((sg) => html`<button type="button" class="chip" data-suggest="${sg}">${sg}</button>`)}</div></div>`
+    : '';
+  const wireSuggestions = () => body().querySelectorAll('[data-suggest]').forEach((btn) => {
+    btn.onclick = () => { close(); productPickerSheet(btn.dataset.suggest, onPick); };
+  });
   const failed = errors.length
     ? html`<details class="fail-note quiet"><summary>${errors.length} store${errors.length > 1 ? 's' : ''} didn't respond</summary>${errors.map((x) => html`<p class="small"><b>${x.store}</b>: ${x.error}</p>`)}</details>`
     : '';
   if (!results.length) {
     // nothing came back: if that's because every store failed, say why up front rather than hiding it
     const reasons = [...new Set(errors.map((x) => x.error))];
-    body().innerHTML = errors.length
+    body().innerHTML = errors.length && !suggestions.length
       ? str(html`<p class="muted center">No results — the stores did not respond.</p>${reasons.map((r) => html`<p class="small muted center">${r}</p>`)}<p class="small muted center">You can still paste a product link instead.</p>`)
-      : str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>`);
+      : str(html`<p class="muted center">No exact matches for “${query}”. Try a shorter name, or paste a link instead.</p>${didYouMean}`);
+    wireSuggestions();
     return;
   }
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">
@@ -170,7 +180,8 @@ async function productPickerSheet(query, onPick) {
         <div class="small muted">${r.store}${shippingNote(r)}${r.condition ? html` · <span class="chip tiny warn">${r.condition}</span>` : ''}</div></div>
       <div class="pick-price">${money(r.price, r.currency)}</div>
     </button></li>`);
-  body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>${failed}`);
+  body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>${didYouMean}${failed}`);
+  wireSuggestions();
   body().querySelectorAll('.pick-row').forEach((btn) => {
     btn.onclick = () => { onPick(results[Number(btn.dataset.i)]); close(); };
   });

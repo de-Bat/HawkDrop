@@ -40,10 +40,16 @@ def stores() -> list[dict]:
             for s in STORES.values()]
 
 
+def _site_label(site: str) -> str:
+    brand, _, tld = site.partition(".")
+    name = "eBay" if brand == "ebay" else brand.capitalize()
+    return name if tld == "com" else f"{name} ({tld})"
+
+
 def search_candidate(ex: Extraction, site: str = "ebay.com") -> dict:
     return {"title": ex.title, "price": _r(ex.price), "currency": ex.currency, "url": ex.url,
             "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock,
-            "store": "eBay" if site == "ebay.com" else f"eBay ({site.removeprefix('ebay.')})"}
+            "store": _site_label(site)}
 
 
 def forwarder(f: Forwarder) -> dict:

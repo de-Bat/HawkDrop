@@ -97,26 +97,29 @@ class ApiTest(ServerTest):
 
         self.assertEqual(self.call("POST", "/api/search", {})[0], 400)
         self.assertEqual(self.call("POST", "/api/search", {"query": "x", "condition": "bogus"})[0], 400)
-        with unittest.mock.patch("hawksense.ebay.fetch_html", return_value=SEARCH_PAGE):
+        with unittest.mock.patch("hawksense.ebay.fetch_html", return_value=SEARCH_PAGE), \
+                unittest.mock.patch("hawksense.amazon.fetch_html", side_effect=FetchError("blocked")):
             status, res = self.call("POST", "/api/search", {"query": "headphones"})
         self.assertEqual(status, 200)
         self.assertEqual([r["title"] for r in res["results"]][:2], ["Headphones B", "Headphones A"])
         self.assertEqual(res["results"][0]["store"], "eBay")
-        self.assertEqual(res["errors"], [])
+        self.assertEqual(sorted(e["store"] for e in res["errors"]), ["amazon.co.uk", "amazon.com", "amazon.de"])
         # one store failing must not fail the search
         def flaky(url, *a, **k):
             if "ebay.com" in url:
                 return SEARCH_PAGE
             raise FetchError("blocked")
 
-        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=flaky):
+        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=flaky), \
+                unittest.mock.patch("hawksense.amazon.fetch_html", side_effect=flaky):
             status, res = self.call("POST", "/api/search", {"query": "headphones"})
         self.assertEqual(status, 200)
         self.assertEqual(len(res["results"]), 2)
-        self.assertEqual(sorted(e["store"] for e in res["errors"]), ["ebay.co.uk", "ebay.de"])
-        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=FetchError("blocked")):
+        self.assertEqual(sorted(e["store"] for e in res["errors"]), ["amazon.co.uk", "amazon.com", "amazon.de", "ebay.co.uk", "ebay.de"])
+        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=FetchError("blocked")), \
+                unittest.mock.patch("hawksense.amazon.fetch_html", side_effect=FetchError("blocked")):
             status, res = self.call("POST", "/api/search", {"query": "headphones"})
-        self.assertEqual((status, res["results"], len(res["errors"])), (200, [], 3))
+        self.assertEqual((status, res["results"], len(res["errors"])), (200, [], 6))
 
     def test_validation(self):
         self.assertEqual(self.call("POST", "/api/items", {"name": ""})[0], 400)

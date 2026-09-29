@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
-from hawksense import __version__, api, ebay, rules
+from hawksense import __version__, amazon, api, ebay, rules
 from hawksense import settings as app_settings
 from hawksense.config import Config
 from hawksense.currency import FX
@@ -212,10 +212,12 @@ class Api:
         if condition not in (None, "new", "used", "any"):
             raise ApiError(400, "'condition' must be new, used or any")
         cond = None if condition in (None, "any") else condition
-        sites = list(ebay.SITES)
+        sites = list(ebay.SITES) + list(amazon.SITES)
         results, errors = [], []
 
         def one(site):
+            if site in amazon.SITES:
+                return site, amazon.search_candidates(q, site)
             return site, t.ebay.search_candidates(q, cond, site)
 
         # every store is searched independently: one failing (blocked, down, changed markup) must not sink the rest

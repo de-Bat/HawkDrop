@@ -46,13 +46,14 @@ class Extraction:
     image: str | None = None  # a picture of the product, if the page named one
 
 
-def fetch_html(url: str, timeout: float = 20.0) -> str:
+def fetch_html(url: str, timeout: float = 20.0, extra_headers: dict | None = None) -> str:
     """Fetch a page from the public internet (see ``hawksense.netguard`` for what's refused)."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate",
+        **(extra_headers or {}),
     }
     try:
         raw, charset = netguard.fetch(url, headers, timeout)

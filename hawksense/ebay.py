@@ -201,7 +201,8 @@ class EbayApi:
                 continue
             ship = _shipping(s.get("shippingOptions"), currency)
             found.append(Extraction(price, currency, True, ship, s.get("title"), "ebay-api search",
-                                    url=s.get("itemWebUrl"), image=(s.get("image") or {}).get("imageUrl")))
+                                    url=s.get("itemWebUrl"), image=(s.get("image") or {}).get("imageUrl")
+                                    or ((s.get("thumbnailImages") or [{}])[0]).get("imageUrl")))
         return _ranked(found)[:limit]
 
 
@@ -226,7 +227,20 @@ _PRICE_RE = re.compile(r'class="[^"]*s-(?:item|card)__price[^"]*"[^>]*>(.*?)</sp
 _SHIP_RE = re.compile(r'class="[^"]*s-(?:item__shipping|item__logisticsCost|card__shipping)[^"]*"[^>]*>(.*?)</span>',
                       re.S)
 _TITLE_RE = re.compile(r'class="[^"]*s-(?:item|card)__title[^"]*"[^>]*>(?:<span[^>]*>)?(.*?)</', re.S)
-_IMG_RE = re.compile(r'<img[^>]+(?:data-)?src="(https://[^"]+)"', re.S)
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.S)
+_IMG_ATTR_RE = re.compile(r'\b(?:data-defer-load|data-src|data-lazy-src|src)="(https?://[^"]+)"')
+_IMG_SIZE_RE = re.compile(r"/s-l\d+\.")
+
+
+def _card_image(block: str) -> str | None:
+    """The listing's own picture: skip 1px/sprite placeholders and ask eBay for a sharper size."""
+    for tag in _IMG_TAG_RE.findall(block):
+        for m in _IMG_ATTR_RE.finditer(tag):
+            url = html_lib.unescape(m.group(1))
+            if "/images/g/" in url and "/s-l" not in url or url.endswith((".gif", ".svg")):
+                continue  # ebay's static placeholder / icon, not a product photo
+            return _IMG_SIZE_RE.sub("/s-l500.", url)
+    return None
 _TAGS_RE = re.compile(r"<[^>]+>")
 
 
@@ -274,15 +288,39 @@ def parse_search_candidates(page: str, currency: str | None = None, limit: int =
             elif re.search(r"\d", ship_text):
                 shipping = parse_number(ship_text)
         title = _TITLE_RE.search(block)
-        image = _IMG_RE.search(block)
+        image = _card_image(block)
         found.append(Extraction(value, guess_currency(price_text) or currency, True, shipping,
                                 _text(title.group(1)) if title else None, "ebay-search-page", url=url,
-                                image=image.group(1) if image else None))
+                                image=image))
     if not found:
         if re.search(r"captcha|robot|pardon our interruption", page, re.I):
-            raise FetchError("eBay blocked the request - add eBay API keys (see README) or log the price manually")
+            raise FetchError(_BLOCKED_MSG)
         raise FetchError("no listings found on the eBay search page")
     return _ranked(found)[:limit]
+
+
+_BROWSER_HEADERS = {
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1", "Sec-CH-UA-Mobile": "?0", "Sec-CH-UA-Platform": '"Windows"',
+    "Cache-Control": "max-age=0",
+}
+_BLOCKED_MSG = "eBay blocked the request - add eBay API keys (see README) or log the price manually"
+
+
+def _fetch_ebay_page(url: str) -> str:
+    """eBay answers plain scrapers with 403; retry once with the headers a real browser sends."""
+    try:
+        return fetch_html(url)
+    except FetchError as exc:
+        if "403" not in str(exc) and "429" not in str(exc):
+            raise
+    try:
+        return fetch_html(url, extra_headers=_BROWSER_HEADERS)
+    except FetchError as exc:
+        if "403" in str(exc) or "429" in str(exc):
+            raise FetchError(_BLOCKED_MSG) from None
+        raise
 
 
 class EbaySource:
@@ -310,7 +348,7 @@ class EbaySource:
             except EbayError as exc:
                 api_error = exc
         try:
-            page = fetch_html(url)
+            page = _fetch_ebay_page(url)
             if search:
                 return parse_search_page(page, currency)
             ex = extract_price(page, url, price_regex)
@@ -333,7 +371,7 @@ class EbaySource:
             except EbayError as exc:
                 api_error = exc
         try:
-            page = fetch_html(search_url(query, site, condition))
+            page = _fetch_ebay_page(search_url(query, site, condition))
             return parse_search_candidates(page, currency, limit)
         except FetchError as exc:
             if api_error:

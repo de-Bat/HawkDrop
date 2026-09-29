@@ -213,3 +213,10 @@ class TrackerCheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardImageTests(unittest.TestCase):
+    def test_skips_placeholder_and_upsizes(self):
+        block = ('<img src="https://ir.ebaystatic.com/images/g/x/s.gif">'
+                 '<img data-defer-load="https://i.ebayimg.com/images/g/abc/s-l225.jpg" src="https://i.ebayimg.com/x.gif">')
+        self.assertEqual(ebay._card_image(block), "https://i.ebayimg.com/images/g/abc/s-l500.jpg")

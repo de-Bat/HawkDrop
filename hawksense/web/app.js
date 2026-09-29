@@ -143,7 +143,7 @@ async function productPickerSheet(query, onPick) {
     return;
   }
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">
-      ${r.image ? html`<img class="item-thumb" src="${r.image}" alt="" loading="lazy">` : html`<div class="item-thumb"></div>`}
+      ${r.image ? html`<img class="item-thumb" src="${r.image}" alt="" loading="lazy" referrerpolicy="no-referrer">` : html`<div class="item-thumb"></div>`}
       <div class="grow"><div class="pick-title">${r.title || r.store}</div>
         <div class="small muted">${r.store}${shippingNote(r)}</div></div>
       <div class="pick-price">${money(r.price, r.currency)}</div>
@@ -156,7 +156,7 @@ async function productPickerSheet(query, onPick) {
 
 function pickedChip(c, { onRemove } = {}) {
   return html`<div class="card picked-chip">
-    ${c.image ? html`<img class="item-thumb" src="${c.image}" alt="" loading="lazy">` : html`<div class="item-thumb"></div>`}
+    ${c.image ? html`<img class="item-thumb" src="${c.image}" alt="" loading="lazy" referrerpolicy="no-referrer">` : html`<div class="item-thumb"></div>`}
     <div class="grow"><b>${c.title || c.store}</b><div class="small muted">${c.store} · ${money(c.price, c.currency)}${shippingNote(c)}</div></div>
     ${onRemove ? html`<button type="button" class="icon-btn" data-action="${onRemove}" aria-label="Remove selection">${icon('close')}</button>` : ''}
   </div>`;
@@ -1389,3 +1389,11 @@ if (state.snapshot === null) {
 render({ force: true });
 init();
 registerServiceWorker();
+
+// a thumbnail that fails to load (dead link, hotlink block) becomes the empty placeholder
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.classList.contains('item-thumb')) {
+    img.replaceWith(Object.assign(document.createElement('div'), { className: 'item-thumb' }));
+  }
+}, true);

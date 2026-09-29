@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 
 from datetime import date, datetime, timedelta, timezone
@@ -67,24 +68,39 @@ def _short_name(title: str) -> str:
     return " ".join(out[:6])
 
 
+def _token_score(tok: str, text: str, words: list[str]) -> float:
+    """How well one query word is found in a title: 1 for an exact hit (model numbers match across word breaks),
+    a discounted similarity for a typo ("line" ~ "live"), else 0. Words with digits count double: the model
+    number is what tells "670NC" from "770NC"."""
+    parts = re.findall(r"[a-z]+|\d+", tok)
+    weight = 2.0 if re.search(r"\d", tok) else 1.0
+    digits = [p for p in parts if p.isdigit()]
+    if all(p in text for p in digits) and all(p in text for p in parts if len(p) > 1 or p.isdigit()) and parts:
+        return weight
+    best = max((difflib.SequenceMatcher(None, tok, w).ratio() for w in words), default=0.0)
+    return weight * 0.9 * best if best >= 0.7 and not digits else 0.0
+
+
 def suggest_phrases(query: str, titles: list[str | None], limit: int = 5) -> list[str]:
     """"Did you mean" phrases: the product names of near-miss listings (they share most of the query but not
-    all of it, e.g. a neighbouring model), most common first."""
+    all of it, e.g. a neighbouring model, or the model you mistyped), best match first."""
     toks = re.findall(r"[a-z0-9]+", query.lower())
     if not toks:
         return []
-    need = (len(toks) + 1) // 2
-    counts: dict[str, list] = {}
+    top = sum(2.0 if re.search(r"\d", t) else 1.0 for t in toks)
+    found: dict[str, list] = {}
     for title in titles:
         if not title or matches_query(query, title):
             continue
-        text = re.sub(r"[^a-z0-9]+", "", title.lower())
-        hit = sum(all(p in text for p in re.findall(r"[a-z]+|\d+", t)) for t in toks)
+        low = title.lower()
+        text, words = re.sub(r"[^a-z0-9]+", "", low), re.findall(r"[a-z0-9]+", low)
+        score = sum(_token_score(t, text, words) for t in toks)
         name = _short_name(title)
-        if hit >= need and name and name.lower() != query.lower():
-            entry = counts.setdefault(re.sub(r"[^a-z0-9]+", "", name.lower()), [name, 0, hit])
+        if score >= top / 2 and name and name.lower() != query.lower():
+            entry = found.setdefault(re.sub(r"[^a-z0-9]+", "", name.lower()), [name, 0, score])
             entry[1] += 1
-    ranked = sorted(counts.values(), key=lambda e: (-e[2], -e[1], len(e[0])))
+            entry[2] = max(entry[2], score)
+    ranked = sorted(found.values(), key=lambda e: (-e[2], -e[1], len(e[0])))
     return [e[0] for e in ranked[:limit]]
 
 
@@ -94,10 +110,10 @@ def _site_label(site: str) -> str:
     return name if tld == "com" else f"{name} ({tld})"
 
 
-def search_candidate(ex: Extraction, site: str = "ebay.com") -> dict:
+def search_candidate(ex: Extraction, site: str = "ebay.com", label: str | None = None) -> dict:
     return {"title": ex.title, "price": _r(ex.price), "currency": ex.currency, "url": ex.url,
             "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock,
-            "condition": ex.condition, "store": _site_label(site)}
+            "condition": ex.condition, "store": label or _site_label(site)}
 
 
 def forwarder(f: Forwarder) -> dict:

@@ -47,6 +47,14 @@ class AmazonSearchTest(unittest.TestCase):
                   "JBL Live 670NC Wireless On-Ear Headphones"]
         self.assertEqual(suggest_phrases("jbl live nc670", titles), ["JBL Live 770NC", "JBL Live 680NC"])
 
+    def test_did_you_mean_survives_typos(self):
+        from hawksense.api import suggest_phrases
+
+        titles = ["JBL Live 770NC - Wireless", "JBL Live 670NC Wireless On-Ear Headphones", "JBL MA710 AV Receiver",
+                  "Sony WH-1000XM5"]
+        self.assertEqual(suggest_phrases("jbl line 670c", titles)[0], "JBL Live 670NC")
+        self.assertEqual(suggest_phrases("jbl lvie 670nc", titles)[0], "JBL Live 670NC")
+
 
 if __name__ == "__main__":
     unittest.main()

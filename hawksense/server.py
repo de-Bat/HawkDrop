@@ -214,6 +214,18 @@ class Api:
         cond = None if condition in (None, "any") else condition
         sites = list(ebay.SITES) + list(amazon.SITES)
         results, errors, titles = [], [], []
+        pasted = None
+        if re.match(r"https?://", q, re.I):
+            # a pasted product link: show that listing first, then look for the same product elsewhere by its name
+            try:
+                ex = amazon.listing_from_url(q)
+                pasted = api.search_candidate(ex, label=t.store_for(q).name)
+                pasted["url"] = q
+                results.append(pasted)
+                q = api._short_name(ex.title or "") or q
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"store": urlparse(q).hostname or "link", "error": str(exc)})
+                return {"results": [], "errors": errors, "suggestions": []}
 
         def one(site):
             if site in amazon.SITES:
@@ -227,7 +239,7 @@ class Api:
                 try:
                     for ex in fut.result()[1]:
                         titles.append(ex.title)
-                        if api.matches_query(q, ex.title):
+                        if api.matches_query(q, ex.title) and not (pasted and ex.url and ex.url.split("?")[0] == pasted["url"].split("?")[0]):
                             results.append(api.search_candidate(ex, site))
                 except Exception as exc:  # noqa: BLE001 - any single-store failure is reported, not raised
                     errors.append({"store": site, "error": str(exc)})

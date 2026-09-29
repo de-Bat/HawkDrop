@@ -121,6 +121,23 @@ class ApiTest(ServerTest):
             status, res = self.call("POST", "/api/search", {"query": "headphones"})
         self.assertEqual((status, res["results"], len(res["errors"])), (200, [], 6))
 
+    def test_search_with_a_pasted_link_lists_that_listing_first(self):
+        from hawksense.fetch import Extraction
+        from tests.test_ebay import SEARCH_PAGE
+
+        url = "https://www.amazon.com/dp/B0CQ1CVW3Z"
+        ex = Extraction(129.95, "USD", True, None, "Headphones B Wireless Over-Ear, Black", "amazon-pattern", url=url)
+        with unittest.mock.patch("hawksense.amazon.listing_from_url", return_value=ex), \
+                unittest.mock.patch("hawksense.ebay.fetch_html", return_value=SEARCH_PAGE), \
+                unittest.mock.patch("hawksense.amazon.fetch_html", side_effect=FetchError("blocked")):
+            status, res = self.call("POST", "/api/search", {"query": url})
+        self.assertEqual(status, 200)
+        self.assertEqual(res["results"][0]["url"], url)
+        self.assertEqual(res["results"][0]["store"], "Amazon.com")
+        with unittest.mock.patch("hawksense.amazon.listing_from_url", side_effect=FetchError("blocked")):
+            status, res = self.call("POST", "/api/search", {"query": url})
+        self.assertEqual((status, res["results"], len(res["errors"])), (200, [], 1))
+
     def test_validation(self):
         self.assertEqual(self.call("POST", "/api/items", {"name": ""})[0], 400)
         _, item = self.call("POST", "/api/items", {"name": "X"})

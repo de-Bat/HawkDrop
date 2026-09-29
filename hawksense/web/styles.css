@@ -458,4 +458,5 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, .icon-btn:focus-visib
 .fail-note { color: var(--wait); margin: .25rem 0; }
 .fail-note summary { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 .fail-note summary .icon { width: 16px; height: 16px; flex: none; }
+.fail-note.quiet { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
 .fail-note p { margin: .25rem 0 0; overflow-wrap: anywhere; user-select: text; }

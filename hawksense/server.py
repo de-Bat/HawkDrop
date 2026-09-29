@@ -227,8 +227,6 @@ class Api:
                         results.append(api.search_candidate(ex, site))
                 except Exception as exc:  # noqa: BLE001 - any single-store failure is reported, not raised
                     errors.append({"store": site, "error": str(exc)})
-        if not results and errors and len(errors) == len(sites):
-            raise ApiError(502, "; ".join(f"{e['store']}: {e['error']}" for e in errors))
         return {"results": results, "errors": errors}
 
     @staticmethod

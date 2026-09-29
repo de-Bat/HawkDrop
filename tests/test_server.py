@@ -115,7 +115,8 @@ class ApiTest(ServerTest):
         self.assertEqual(len(res["results"]), 2)
         self.assertEqual(sorted(e["store"] for e in res["errors"]), ["ebay.co.uk", "ebay.de"])
         with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=FetchError("blocked")):
-            self.assertEqual(self.call("POST", "/api/search", {"query": "headphones"})[0], 502)
+            status, res = self.call("POST", "/api/search", {"query": "headphones"})
+        self.assertEqual((status, res["results"], len(res["errors"])), (200, [], 3))
 
     def test_validation(self):
         self.assertEqual(self.call("POST", "/api/items", {"name": ""})[0], 400)

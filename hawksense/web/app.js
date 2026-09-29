@@ -153,9 +153,11 @@ async function productPickerSheet(query, onPick) {
   }
   if (!panel.isConnected) return; // closed while the search was in flight
   // stores that failed are noted, never fatal: the ones that answered still show
-  const failed = errors.map((x) => failedNote(`${x.store} failed`, x.error));
+  const failed = errors.length
+    ? html`<details class="fail-note quiet"><summary>${errors.length} store${errors.length > 1 ? 's' : ''} didn't respond</summary>${errors.map((x) => html`<p class="small"><b>${x.store}</b>: ${x.error}</p>`)}</details>`
+    : '';
   if (!results.length) {
-    body().innerHTML = str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>${failed}`);
+    body().innerHTML = str(html`<p class="muted center">${errors.length ? 'No results — the stores did not respond.' : `No matches for “${query}”. Try a shorter or different name, or paste a link instead.`}</p>${failed}`);
     return;
   }
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">

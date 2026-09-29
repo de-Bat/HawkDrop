@@ -32,7 +32,11 @@ AGREE = 0.15  # relative spread for sources to count as agreeing
 CONFLICT = 0.30  # box volumes this close still agree (small differences on three sides add up)
 
 _WEIGHT_UNITS = {
-    "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0, "kilogramm": 1.0, "gramm": 0.001, "ק\"ג": 1.0, "קג": 1.0, "קילו": 1.0,
+    "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0, "kilogramm": 1.0, "gramm": 0.001,
+    "kilogramme": 1.0, "kilogrammes": 1.0, "kilogramo": 1.0, "kilogramos": 1.0,  # fr, es
+    "gramme": 0.001, "grammes": 0.001, "gramo": 0.001, "gramos": 0.001,
+    "livre": 0.45359237, "livres": 0.45359237, "libra": 0.45359237, "libras": 0.45359237,
+    "once": 0.028349523, "onces": 0.028349523, "onza": 0.028349523, "onzas": 0.028349523, "ק\"ג": 1.0, "קג": 1.0, "קילו": 1.0,
     "g": 0.001, "gr": 0.001, "gram": 0.001, "grams": 0.001, "גרם": 0.001,
     "lb": 0.45359237, "lbs": 0.45359237, "pound": 0.45359237, "pounds": 0.45359237,
     "oz": 0.028349523, "ounce": 0.028349523, "ounces": 0.028349523,
@@ -41,25 +45,29 @@ _LENGTH_UNITS = {"cm": 1.0, "ס\"מ": 1.0, "mm": 0.1, "מ\"מ": 0.1, "in": 2.54,
 _UNIT_CODES = {"kgm": "kg", "grm": "g", "lbr": "lb", "onz": "oz", "cmt": "cm", "mmt": "mm", "inh": "in", "mtr": "m"}
 
 _NUM = r"(\d+(?:[.,]\d+)?)"
-_WEIGHT_RE = re.compile(_NUM + r"\s*(kilogramm?|kilograms?|kgs?|gramm?|grams?|gr|g|pounds?|lbs?|ounces?|oz|ק\"ג|קג|קילו|גרם)(?![a-z])",
+_WEIGHT_RE = re.compile(_NUM + r"\s*(kilogramm?e?s?|kilogramos?|kilograms?|kgs?|grammes?|gramm?|gramos?|grams?|gr|g|pounds?|lbs?|livres?|libras?|ounces?|onces?|onzas?|oz|ק\"ג|קג|קילו|גרם)(?![a-z])",
                         re.I)
 # Amazon writes sizes as '5 x 3 x 2 inches', '3.9"D x 2.4"W x 2"H' or '5 by 3 by 2 inches'
 _SEP = r"\s*(?:[dwhl](?![a-z]))?\s*(?:[x×*]|by)\s*"
-_UNIT = r"(?:centimet(?:er|re)s?|cm|millimet(?:er|re)s?|mm|inch(?:es)?|in(?![a-z])|\"|״|”|″|ס\"מ|מ\"מ)?"
+_UNIT = r"(?:centim[eè]tres?|cent[ií]metros?|milim[eè]tres?|mil[ií]metros?|pouces?|pulgadas?|centimet(?:er|re)s?|cm|millimet(?:er|re)s?|mm|inch(?:es)?|in(?![a-z])|\"|״|”|″|ס\"מ|מ\"מ)?"
 _DIMS_RE = re.compile(_NUM + r"\s*" + _UNIT + _SEP + _NUM + r"\s*" + _UNIT + _SEP + _NUM + r"\s*(" + _UNIT[3:], re.I)
 
 # Whole-label patterns (after lower-casing and dropping "(kg)"-style hints) -> kind.
 # Package/shipping values are what a forwarder weighs; "item" is the product alone.
 _WEIGHT_LABELS = [
-    (re.compile(r"(?:item |product )?(?:shipping|package|parcel|boxed|gross) weight|versandgewicht|verpackungsgewicht|משקל (?:ה?אריזה|משלוח|ברוטו)"),
+    (re.compile(r"(?:item |product )?(?:shipping|package|parcel|boxed|gross) weight|versandgewicht|verpackungsgewicht|poids (?:du colis|de l['’]emballage|d['’]exp[eé]dition|brut)"
+                r"|peso (?:del|de) (?:paquete|embalaje|env[ií]o|bulto)|משקל (?:ה?אריזה|משלוח|ברוטו)"),
      "package"),
-    (re.compile(r"(?:item |product |net |unit )?weight|משקל(?: ה?מוצר| נטו)?|artikelgewicht|produktgewicht|gewicht"),
+    (re.compile(r"(?:item |product |net |unit )?weight|משקל(?: ה?מוצר| נטו)?|artikelgewicht|produktgewicht|gewicht"
+                r"|poids(?: (?:de l['’]article|de l['’]produit|du produit|net))?|peso(?: (?:del|de) (?:art[ií]culo|producto))?"),
      "item"),
 ]
 _DIMS_LABELS = [
     (re.compile(r"(?:item )?(?:package|shipping|box|parcel|boxed) (?:dimensions|size)(?: l ?x ?w ?x ?h)?"
-                r"|verpackungsabmessungen|packungsabmessungen|מידות (?:ה?אריזה|משלוח)"), "package"),
-    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)|produktabmessungen|artikelabmessungen|abmessungen(?: l ?x ?w ?x ?h| w ?x ?h ?x ?d)?"
+                r"|verpackungsabmessungen|packungsabmessungen|dimensions (?:du colis|de l['’]emballage|d['’]exp[eé]dition)"
+                r"|dimensiones (?:del|de) (?:paquete|embalaje|env[ií]o|bulto)|מידות (?:ה?אריזה|משלוח)"), "package"),
+    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)|produktabmessungen|artikelabmessungen|abmessungen"
+                r"|dimensions(?: (?:du produit|de l['’]article|du produit))?|dimensiones(?: (?:del|de) (?:art[ií]culo|producto))?|tama[ñn]o(?: l ?x ?w ?x ?h| w ?x ?h ?x ?d)?"
                 r"|מידות(?: ה?מוצר)?"), "item"),
 ]
 
@@ -97,11 +105,11 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
     unit = (m.group(4) or "cm").lower()
     if unit in ("״", "”", "″"):
         unit = '"'
-    if unit.startswith("centimet"):
+    if unit.startswith(("centimet", "centim\u00e8", "cent\u00edmet")):
         unit = "cm"
-    elif unit.startswith("millimet"):
+    elif unit.startswith(("millimet", "milim\u00e8", "mil\u00edmet")):
         unit = "mm"
-    elif unit.startswith("inch"):
+    elif unit.startswith(("inch", "pouce", "pulgada")):
         unit = "in"
     factor = _LENGTH_UNITS.get(unit, 1.0)  # "in" and '"' -> 2.54
     dims = tuple(round(_num(m.group(i)) * factor, 1) for i in (1, 2, 3))

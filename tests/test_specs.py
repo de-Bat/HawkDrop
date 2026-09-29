@@ -55,6 +55,18 @@ class ExtractTest(unittest.TestCase):
         s = extract_specs(boxed)
         self.assertEqual((s.dims_kind, s.dims_cm, s.weight_kg), ("package", (25, 20, 10), 0.5))
 
+    def test_amazon_fr_and_es(self):
+        fr = ('<table><tr><th>Poids de l’article</th><td>340 grammes</td></tr>'
+              '<tr><th>Dimensions du colis</th><td>25 x 20 x 10 centimètres; 1,2 kilogrammes</td></tr></table>')
+        s = extract_specs(fr)
+        self.assertEqual((s.weight_kg, s.weight_kind, s.dims_cm, s.dims_kind), (1.2, "package", (25, 20, 10), "package"))
+        es = ('<table><tr><th>Peso del producto</th><td>340 gramos</td></tr>'
+              '<tr><th>Dimensiones del producto</th><td>19,3 x 17 x 8,3 centímetros</td></tr></table>')
+        s = extract_specs(es)
+        self.assertEqual((s.weight_kg, s.dims_cm), (0.34, (19.3, 17.0, 8.3)))
+        self.assertEqual(parse_dimensions("10 x 5 x 4 pulgadas"), (25.4, 12.7, 10.2))
+        self.assertEqual(parse_weight("2 libras"), 0.907)
+
     def test_amazon_uk_row(self):
         s = extract_specs('<table><tr><th>Product Dimensions</th><td>19.3 x 17 x 8.3 cm; 340 g</td></tr></table>')
         self.assertEqual((s.weight_kg, s.dims_cm), (0.34, (19.3, 17.0, 8.3)))

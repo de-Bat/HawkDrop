@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from hawksense import __version__
 from hawksense.calendar_events import EVENTS, upcoming_events
 from hawksense.db import Item
+from hawksense.fetch import Extraction
 from hawksense.forecast import Advice, Candidate
 from hawksense.forwarders import Account, Forwarder
 from hawksense.landed import LandedCost
@@ -37,6 +38,11 @@ def stores() -> list[dict]:
              "shipping_flat": s.shipping_flat, "shipping_free_over": s.shipping_free_over,
              "collects_import_vat": s.collects_import_vat, "ships_abroad": s.ships_abroad, "notes": s.notes}
             for s in STORES.values()]
+
+
+def search_candidate(ex: Extraction) -> dict:
+    return {"title": ex.title, "price": _r(ex.price), "currency": ex.currency, "url": ex.url,
+            "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock, "store": "eBay"}
 
 
 def forwarder(f: Forwarder) -> dict:

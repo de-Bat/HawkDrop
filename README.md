@@ -346,6 +346,12 @@ its own next check fills in prices without you hunting for links; and every stor
 ways to get it" lists every forwarder that could ship it, not just the ones you've already
 set up, with a one-tap "Set up this forwarder" for the rest.
 
+Instead of pasting a link at all, tap **Search for this product**: it searches eBay (the
+one store with a reliable search API/pages to parse) and shows the matching listings -
+title, picture, price and shipping - so you pick the exact one you mean instead of hoping
+a guessed search page resolves to the right product. The picked listing becomes the item's
+first offer; "Search all stores" (on by default) still fills in the rest.
+
 **Offline.** The app is offline-first:
 
 - A service worker caches the app itself, so it opens with no connection.

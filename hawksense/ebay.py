@@ -184,6 +184,11 @@ class EbayApi:
                           image=(data.get("image") or {}).get("imageUrl"))
 
     def search(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US") -> Extraction:
+        return _cheapest(self.search_candidates(query, condition, marketplace), query)
+
+    def search_candidates(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US",
+                          limit: int = 20) -> list[Extraction]:
+        """Every matching listing, cheapest delivered first (for the user to pick the right one)."""
         filters = ["buyingOptions:{FIXED_PRICE}"]
         if condition:
             filters.append(f"conditionIds:{{{CONDITIONS[condition]}}}")
@@ -197,14 +202,19 @@ class EbayApi:
             ship = _shipping(s.get("shippingOptions"), currency)
             found.append(Extraction(price, currency, True, ship, s.get("title"), "ebay-api search",
                                     url=s.get("itemWebUrl"), image=(s.get("image") or {}).get("imageUrl")))
-        return _cheapest(found, query)
+        return _ranked(found)[:limit]
+
+
+def _ranked(found: list[Extraction]) -> list[Extraction]:
+    # listings that state their shipping cost rank above ones that don't (they may not ship to you)
+    return sorted(found, key=lambda e: (e.shipping is None, e.price + (e.shipping or 0.0)))
 
 
 def _cheapest(found: list[Extraction], query: str) -> Extraction:
-    if not found:
+    ranked = _ranked(found)
+    if not ranked:
         raise EbayError(f"no eBay listings found for {query!r}")
-    # listings that state their shipping cost beat ones that don't (they may not ship to you)
-    return min(found, key=lambda e: (e.shipping is None, e.price + (e.shipping or 0.0)))
+    return ranked[0]
 
 
 # ---- public pages ------------------------------------------------------------------------
@@ -237,6 +247,11 @@ def _result_cards(page: str):
 
 def parse_search_page(page: str, currency: str | None = None) -> Extraction:
     """Cheapest listing on an eBay search results page (best effort: eBay changes its markup)."""
+    return _cheapest(parse_search_candidates(page, currency), "the search")
+
+
+def parse_search_candidates(page: str, currency: str | None = None, limit: int = 20) -> list[Extraction]:
+    """Every listing on an eBay search results page, cheapest delivered first."""
     found = []
     for block in _result_cards(page):
         link, price = _LINK_RE.search(block), _PRICE_RE.search(block)
@@ -267,7 +282,7 @@ def parse_search_page(page: str, currency: str | None = None) -> Extraction:
         if re.search(r"captcha|robot|pardon our interruption", page, re.I):
             raise FetchError("eBay blocked the request - add eBay API keys (see README) or log the price manually")
         raise FetchError("no listings found on the eBay search page")
-    return _cheapest(found, "the search")
+    return _ranked(found)[:limit]
 
 
 class EbaySource:
@@ -302,6 +317,24 @@ class EbaySource:
             ex.currency = ex.currency or currency
             ex.specs = extract_specs(page)
             return ex
+        except FetchError as exc:
+            if api_error:
+                raise FetchError(f"{api_error}; page: {exc}") from None
+            raise
+
+    def search_candidates(self, query: str, condition: str | None = None, site: str = "ebay.com",
+                          limit: int = 20) -> list[Extraction]:
+        """Every matching listing (API when configured, else the public search page), for the user to pick from."""
+        marketplace, currency = SITES.get(site, SITES["ebay.com"])
+        api_error = None
+        if self.api:
+            try:
+                return self.api.search_candidates(query, condition, marketplace, limit)
+            except EbayError as exc:
+                api_error = exc
+        try:
+            page = fetch_html(search_url(query, site, condition))
+            return parse_search_candidates(page, currency, limit)
         except FetchError as exc:
             if api_error:
                 raise FetchError(f"{api_error}; page: {exc}") from None

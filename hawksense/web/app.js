@@ -102,6 +102,66 @@ function openSheet(title, body, onSubmit, { submitLabel = 'Save', extra } = {}) 
   return { form, close };
 }
 
+// a plain picker sheet: no form/submit, each row acts immediately when tapped
+function openPicker(title, body) {
+  const sheet = document.getElementById('sheet');
+  sheet.innerHTML = str(html`
+    <div class="sheet-backdrop" data-close></div>
+    <div class="sheet-panel">
+      <header class="sheet-head"><h2>${title}</h2><button type="button" class="icon-btn" data-close aria-label="Close">${icon('close')}</button></header>
+      <div class="sheet-body">${body}</div>
+    </div>`);
+  sheet.hidden = false;
+  document.body.classList.add('sheet-open');
+  const panel = sheet.querySelector('.sheet-panel');
+  const close = () => { sheet.hidden = true; sheet.innerHTML = ''; document.body.classList.remove('sheet-open'); };
+  sheet.querySelectorAll('[data-close]').forEach((el) => { el.onclick = close; });
+  return { panel, close };
+}
+
+function shippingNote(r) {
+  if (r.shipping == null) return ' · shipping unknown';
+  if (r.shipping === 0) return ' · free shipping';
+  return html` · +${money(r.shipping, r.currency)} shipping`;
+}
+
+// search across stores for a product and let the user pick the right listing;
+// onPick(candidate) runs once, right before the sheet closes
+async function productPickerSheet(query, onPick) {
+  const { panel, close } = openPicker(`Search results · ${query}`, html`<p class="muted center">Searching stores for “${query}”…</p>`);
+  const body = () => panel.querySelector('.sheet-body');
+  let results;
+  try {
+    results = (await online('POST', 'api/search', { query })).results;
+  } catch (e) {
+    body().innerHTML = str(html`<p class="muted center">Could not search: ${e.message}</p>`);
+    return;
+  }
+  if (!panel.isConnected) return; // closed while the search was in flight
+  if (!results.length) {
+    body().innerHTML = str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>`);
+    return;
+  }
+  const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">
+      ${r.image ? html`<img class="item-thumb" src="${r.image}" alt="" loading="lazy">` : html`<div class="item-thumb"></div>`}
+      <div class="grow"><div class="pick-title">${r.title || r.store}</div>
+        <div class="small muted">${r.store}${shippingNote(r)}</div></div>
+      <div class="pick-price">${money(r.price, r.currency)}</div>
+    </button></li>`);
+  body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>`);
+  body().querySelectorAll('.pick-row').forEach((btn) => {
+    btn.onclick = () => { onPick(results[Number(btn.dataset.i)]); close(); };
+  });
+}
+
+function pickedChip(c, { onRemove } = {}) {
+  return html`<div class="card picked-chip">
+    ${c.image ? html`<img class="item-thumb" src="${c.image}" alt="" loading="lazy">` : html`<div class="item-thumb"></div>`}
+    <div class="grow"><b>${c.title || c.store}</b><div class="small muted">${c.store} · ${money(c.price, c.currency)}${shippingNote(c)}</div></div>
+    ${onRemove ? html`<button type="button" class="icon-btn" data-action="${onRemove}" aria-label="Remove selection">${icon('close')}</button>` : ''}
+  </div>`;
+}
+
 const numOrNull = (v) => {
   if (v == null || String(v).trim() === '') return null;
   const n = Number(String(v).replace(/,/g, ''));
@@ -430,6 +490,8 @@ function categoryOptions(selected) {
   return cats.map((c) => html`<option value="${c}" ${c === selected ? 'selected' : ''}>${c === 'default' ? 'other' : c}</option>`);
 }
 
+let addPicked = null;
+
 function viewAdd() {
   return html`<h1 class="page-title">Track an item</h1>
     <form class="card form" id="add-form" novalidate>
@@ -438,13 +500,18 @@ function viewAdd() {
         <label class="grow">Category<select name="category">${categoryOptions('electronics')}</select></label>
         <label class="grow">Target price (${currency()})<input name="target_price" inputmode="decimal" placeholder="optional"></label>
       </div>
-      <label>Product links <span class="muted small">(one per line: KSP, Ivory, Amazon, AliExpress…)</span>
-        <textarea name="urls" rows="4" placeholder="https://ksp.co.il/web/item/…&#10;https://www.amazon.com/dp/…"></textarea></label>
+      <button type="button" class="btn wide" data-action="search-products" ${state.online ? '' : 'disabled'}
+        title="${state.online ? '' : 'Needs a connection'}">${icon('search')} Search for this product</button>
+      <div id="add-picked">${addPicked ? pickedChip(addPicked, { onRemove: 'add-picked-remove' }) : ''}</div>
+      <details class="small"><summary>Or paste a product link yourself</summary>
+        <label>Product links <span class="muted small">(one per line: KSP, Ivory, Amazon, AliExpress…)</span>
+          <textarea name="urls" rows="3" placeholder="https://ksp.co.il/web/item/…&#10;https://www.amazon.com/dp/…"></textarea></label>
+      </details>
       <label class="check"><input type="checkbox" name="search_all" checked> Search all stores for this item too</label>
       <label class="check"><input type="checkbox" name="check" checked> Fetch prices right away (when online)</label>
       <p class="form-error" hidden></p>
       <button class="btn primary wide" type="submit">Start tracking</button>
-      <p class="small muted">Works offline too: the item is saved on this device and sent to the server when you're back online. Searching stores needs a connection and happens on the next sync.</p>
+      <p class="small muted">Works offline too: the item is saved on this device and sent to the server when you're back online. Searching needs a connection.</p>
     </form>`;
 }
 
@@ -892,10 +959,12 @@ function ebaySearchUrl(query, condition) {
 
 function addOfferSheet(it) {
   const { close } = openSheet(`Add a store · ${it.name}`, html`
+    <button type="button" class="btn wide" id="search-pick-listing" ${state.online ? '' : 'disabled'}>${icon('search')} Search & pick a listing</button>
+    <p class="small muted center">or</p>
     <label>Product link<input name="url" type="url" placeholder="https://…" autocapitalize="off"></label>
     <p class="small muted center">or</p>
     <div class="row gap">
-      <label class="grow">Search eBay <span class="small muted">(cheapest listing)</span><input name="ebay" placeholder="${it.name}" autocomplete="off"></label>
+      <label class="grow">Search eBay <span class="small muted">(cheapest listing, re-checked every time)</span><input name="ebay" placeholder="${it.name}" autocomplete="off"></label>
       <label>Condition<select name="condition"><option value="new">new</option><option value="used">used</option><option value="any">any</option></select></label>
     </div>
     <div class="row gap">
@@ -910,10 +979,21 @@ function addOfferSheet(it) {
     const query = (v.ebay || '').trim();
     if (url && query) throw new Error('Paste a link or search eBay, not both');
     if (query) url = ebaySearchUrl(query, v.condition);
-    if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full product link (https://…) or type an eBay search');
+    if (!/^https?:\/\//i.test(url)) throw new Error('Paste the full product link (https://…), search eBay, or use Search & pick above');
     await mutate({ type: 'add_offer', itemId: it.id, body: { url, shipping: numOrNull(v.shipping), shipping_currency: v.shipping_currency || null, local_shipping: numOrNull(v.local_shipping), regex: v.regex || null } });
     toast(query ? 'eBay search added' : 'Store added');
   }, { submitLabel: 'Add store', extra: html`<button class="btn" type="button" id="search-all-stores" ${state.online ? '' : 'disabled'}>Search all stores</button>` });
+  const pickBtn = document.getElementById('search-pick-listing');
+  if (pickBtn) pickBtn.onclick = () => {
+    productPickerSheet(it.name, async (picked) => {
+      try {
+        await mutate({ type: 'add_offer', itemId: it.id, body: { url: picked.url } });
+        toast('Store added');
+      } catch (e) {
+        toast(`Could not add store: ${e.message}`, { timeout: 7000 });
+      }
+    });
+  };
   const searchBtn = document.getElementById('search-all-stores');
   if (searchBtn) searchBtn.onclick = async () => {
     searchBtn.disabled = true;
@@ -1055,6 +1135,20 @@ async function onClick(ev) {
       filterItemCards();
       break;
     }
+    case 'search-products': {
+      const form = document.getElementById('add-form');
+      const name = form.querySelector('[name=name]').value.trim();
+      if (!name) { toast('Type an item name first'); form.querySelector('[name=name]').focus(); break; }
+      productPickerSheet(name, (picked) => {
+        addPicked = picked;
+        document.getElementById('add-picked').innerHTML = str(pickedChip(picked, { onRemove: 'add-picked-remove' }));
+      });
+      break;
+    }
+    case 'add-picked-remove':
+      addPicked = null;
+      document.getElementById('add-picked').innerHTML = '';
+      break;
     case 'log-price': if (it) logPriceSheet(it); break;
     case 'add-offer': if (it) addOfferSheet(it); break;
     case 'edit-item': if (it) editItemSheet(it); break;
@@ -1133,12 +1227,14 @@ async function onSubmit(ev) {
       const name = v.name.trim();
       if (!name) throw new Error('Give the item a name');
       const urls = v.urls.split(/\s+/).map((u) => u.trim()).filter(Boolean);
+      if (addPicked) urls.push(addPicked.url);
       const bad = urls.find((u) => !/^https?:\/\//i.test(u));
       if (bad) throw new Error(`Not a link: ${bad}`);
       const existing = state.snapshot.items.find((i) => i.name.toLowerCase() === name.toLowerCase());
       const itemId = existing ? existing.id : `tmp-${uid()}`;
       await mutate({ type: 'create_item', itemId, body: { name, category: v.category, target_price: numOrNull(v.target_price), urls, check: v.check === 'on', search_all_stores: v.search_all === 'on' } });
       form.reset();
+      addPicked = null;
       lastHash = null;
       location.hash = `#/item/${itemId}`;
       if (!state.online) toast('Saved on this device. It will sync when you are back online.');

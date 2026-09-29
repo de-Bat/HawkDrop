@@ -206,6 +206,19 @@ a.item-card, a.settings-row { -webkit-tap-highlight-color: transparent; }
 .search-bar .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--muted); pointer-events: none; }
 .search-bar .clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); }
 
+/* ---- product search & pick -------------------------------------------------- */
+.pick-list li + li { border-top: 1px solid var(--border); }
+.pick-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 4px; margin: 2px 0;
+  background: none; border: 0; border-radius: var(--radius-sm); text-align: left; font: inherit; color: var(--text);
+  cursor: pointer; transition: background-color var(--dur) var(--ease);
+}
+.pick-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pick-price { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.picked-chip { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+.picked-chip .grow b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- item page ----------------------------------------------------------- */
 .item-head { display: flex; align-items: center; gap: 6px; margin: 0 0 10px -8px; }
 .item-head h1 { font-size: 20px; overflow-wrap: anywhere; }
@@ -410,7 +423,7 @@ input:disabled, select:disabled { opacity: 0.6; }
   .icon-btn:hover { background: var(--surface-2); }
   .link:hover { color: var(--brand-hover); }
   .tabbar a:hover { color: var(--brand); }
-  a.item-card:hover, .settings-row:hover, .card.fold > summary:hover { background: var(--surface-2); }
+  a.item-card:hover, .settings-row:hover, .card.fold > summary:hover, .pick-row:hover { background: var(--surface-2); }
   .settings-row.needs-attention:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .quote summary:hover .q-store { color: var(--brand); }
   .pill:hover { border-color: var(--border-strong); }

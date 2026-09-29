@@ -6,8 +6,8 @@ from unittest import mock
 
 from hawksense import ebay
 from hawksense.db import Database
-from hawksense.ebay import (EbayApi, EbayError, EbaySource, listing_id, parse_search_page, search_params,
-                           search_url)
+from hawksense.ebay import (EbayApi, EbayError, EbaySource, listing_id, parse_search_candidates, parse_search_page,
+                           search_params, search_url)
 from hawksense.fetch import Extraction, FetchError
 from hawksense.landed import DESTINATIONS
 from hawksense.stores import resolve_store
@@ -115,6 +115,18 @@ class ApiTest(unittest.TestCase):
         data = {**ITEM, "estimatedAvailabilities": [{"estimatedAvailabilityStatus": "OUT_OF_STOCK"}]}
         self.assertFalse(EbayApi("i", "s", http=http_with(data)).item("1").in_stock)
 
+    def test_search_candidates_are_all_returned_ranked_by_delivered_price(self):
+        http = http_with(SEARCH)
+        found = EbayApi("id", "secret", http=http).search_candidates("headphones", "new")
+        self.assertEqual([f.url for f in found],
+                         ["https://www.ebay.com/itm/3", "https://www.ebay.com/itm/2", "https://www.ebay.com/itm/1"])
+        self.assertEqual([f.price for f in found], [270.0, 250.0, 199.0])
+
+    def test_search_candidates_respects_limit(self):
+        http = http_with(SEARCH)
+        found = EbayApi("id", "secret", http=http).search_candidates("headphones", limit=2)
+        self.assertEqual(len(found), 2)
+
 
 class PageTest(unittest.TestCase):
     def test_search_page(self):
@@ -132,6 +144,11 @@ class PageTest(unittest.TestCase):
     def test_blocked_search_page(self):
         with self.assertRaises(FetchError):
             parse_search_page("<html>Pardon Our Interruption...</html>")
+
+    def test_search_page_candidates_excludes_ranges_and_the_template_row(self):
+        found = parse_search_candidates(SEARCH_PAGE, "USD")
+        self.assertEqual([f.title for f in found], ["Headphones B", "Headphones A"])
+        self.assertEqual([f.price for f in found], [299.0, 289.0])
 
 
 class SourceTest(unittest.TestCase):
@@ -157,6 +174,20 @@ class SourceTest(unittest.TestCase):
         with mock.patch.object(ebay, "fetch_html", return_value="<html></html>"):
             with self.assertRaisesRegex(FetchError, "invalid client"):
                 src.fetch("https://www.ebay.com/itm/123456789012")
+
+    def test_search_candidates_via_api(self):
+        http = http_with(SEARCH)
+        src = EbaySource({"client_id": "a", "client_secret": "b"}, env={}, http=http)
+        found = src.search_candidates("headphones")
+        self.assertEqual(len(found), 3)
+        self.assertEqual(found[0].url, "https://www.ebay.com/itm/3")
+
+    def test_search_candidates_falls_back_to_page_without_credentials(self):
+        src = EbaySource({}, env={})
+        with mock.patch.object(ebay, "fetch_html", return_value=SEARCH_PAGE) as fetch_html:
+            found = src.search_candidates("headphones", site="ebay.co.uk")
+        self.assertEqual([f.title for f in found], ["Headphones B", "Headphones A"])
+        self.assertIn("www.ebay.co.uk/sch", fetch_html.call_args[0][0])
 
 
 class TrackerCheckTest(unittest.TestCase):

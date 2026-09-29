@@ -43,6 +43,40 @@ async function api(method, path, body) {
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
   step('service worker active');
 
+  // 2b. search for a product instead of pasting a link: pick the right listing from several options
+  const SEARCH_RESULTS = { results: [
+    { title: 'Kindle Paperwhite 11th Gen - New Sealed', price: 129.0, currency: 'USD',
+      url: 'https://www.ebay.com/itm/9001', image: null, shipping: 0, in_stock: true, store: 'eBay' },
+    { title: 'Kindle Paperwhite 11th Gen (Used, Good)', price: 79.0, currency: 'USD',
+      url: 'https://www.ebay.com/itm/9002', image: null, shipping: 9.99, in_stock: true, store: 'eBay' },
+  ] };
+  await page.route('**/api/search', (route) => route.fulfill(
+    { status: 200, contentType: 'application/json', body: JSON.stringify(SEARCH_RESULTS) }));
+  await page.goto(BASE + '/#/add');
+  await page.fill('input[name=name]', 'Kindle Paperwhite');
+  await page.locator('input[name=search_all]').uncheck(); // keep this step fast/offline-deterministic
+  await page.locator('input[name=check]').uncheck();
+  await page.getByRole('button', { name: /Search for this product/ }).click();
+  await page.getByText('Search results').waitFor();
+  await page.locator('.pick-row').first().waitFor();
+  assert.equal(await page.locator('.pick-row').count(), 2);
+  await page.locator('.pick-row').nth(1).click(); // pick the used/cheaper listing, not the first
+  await page.locator('#add-picked').getByText('Kindle Paperwhite 11th Gen (Used, Good)').waitFor();
+  step('search: several listings shown, one picked');
+  let createdBody = null;
+  await page.route('**/api/items', async (route, req) => {
+    if (req.method() === 'POST') createdBody = req.postDataJSON();
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Start tracking' }).click();
+  await page.waitForFunction(() => /#\/item\/\d+$/.test(location.hash));
+  await page.getByText('eBay').first().waitFor();
+  assert.deepEqual(createdBody.urls, ['https://www.ebay.com/itm/9002']);
+  await page.locator('.pill', { hasText: 'Synced' }).waitFor({ timeout: 15000 }); // fully synced before going offline below
+  step('search: the picked listing (not the first result) became the item\'s offer');
+  await page.unroute('**/api/search');
+  await page.unroute('**/api/items');
+
   // 3. go offline and reload: app shell + data must come from the device
   await context.setOffline(true);
   await page.reload();

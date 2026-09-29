@@ -204,6 +204,19 @@ class Api:
         return api.item_detail(t, _item(t, item_id))
 
     @staticmethod
+    @route("POST", r"/api/search")
+    def search_candidates(t, body, query):
+        q = _str(body, "query", required=True)
+        condition = _str(body, "condition")
+        if condition not in (None, "new", "used", "any"):
+            raise ApiError(400, "'condition' must be new, used or any")
+        try:
+            found = t.ebay.search_candidates(q, None if condition in (None, "any") else condition)
+        except FetchError as exc:
+            raise ApiError(502, str(exc)) from None
+        return {"results": [api.search_candidate(ex) for ex in found]}
+
+    @staticmethod
     @route("POST", r"/api/items")
     def create_item(t, body, query):
         name = _str(body, "name", required=True)

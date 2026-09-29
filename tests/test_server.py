@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from hawksense.config import Config
+from hawksense.fetch import FetchError
 from hawksense.server import ServerContext, make_server
 
 
@@ -90,6 +91,19 @@ class ApiTest(ServerTest):
         # explicit search on an existing item skips stores it already has
         _, again = self.call("POST", f"/api/items/{item['id']}/search", {"check": False})
         self.assertEqual(len(again["offers"]), len(item["offers"]))
+
+    def test_search_candidates(self):
+        from tests.test_ebay import SEARCH_PAGE
+
+        self.assertEqual(self.call("POST", "/api/search", {})[0], 400)
+        self.assertEqual(self.call("POST", "/api/search", {"query": "x", "condition": "bogus"})[0], 400)
+        with unittest.mock.patch("hawksense.ebay.fetch_html", return_value=SEARCH_PAGE):
+            status, res = self.call("POST", "/api/search", {"query": "headphones"})
+        self.assertEqual(status, 200)
+        self.assertEqual([r["title"] for r in res["results"]], ["Headphones B", "Headphones A"])
+        self.assertEqual(res["results"][0]["store"], "eBay")
+        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=FetchError("blocked")):
+            self.assertEqual(self.call("POST", "/api/search", {"query": "headphones"})[0], 502)
 
     def test_validation(self):
         self.assertEqual(self.call("POST", "/api/items", {"name": ""})[0], 400)

@@ -157,7 +157,11 @@ async function productPickerSheet(query, onPick) {
     ? html`<details class="fail-note quiet"><summary>${errors.length} store${errors.length > 1 ? 's' : ''} didn't respond</summary>${errors.map((x) => html`<p class="small"><b>${x.store}</b>: ${x.error}</p>`)}</details>`
     : '';
   if (!results.length) {
-    body().innerHTML = str(html`<p class="muted center">${errors.length ? 'No results — the stores did not respond.' : `No matches for “${query}”. Try a shorter or different name, or paste a link instead.`}</p>${failed}`);
+    // nothing came back: if that's because every store failed, say why up front rather than hiding it
+    const reasons = [...new Set(errors.map((x) => x.error))];
+    body().innerHTML = errors.length
+      ? str(html`<p class="muted center">No results — the stores did not respond.</p>${reasons.map((r) => html`<p class="small muted center">${r}</p>`)}<p class="small muted center">You can still paste a product link instead.</p>`)
+      : str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>`);
     return;
   }
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">

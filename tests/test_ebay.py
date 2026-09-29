@@ -220,3 +220,24 @@ class CardImageTests(unittest.TestCase):
         block = ('<img src="https://ir.ebaystatic.com/images/g/x/s.gif">'
                  '<img data-defer-load="https://i.ebayimg.com/images/g/abc/s-l225.jpg" src="https://i.ebayimg.com/x.gif">')
         self.assertEqual(ebay._card_image(block), "https://i.ebayimg.com/images/g/abc/s-l500.jpg")
+
+
+class FailingStoreTests(unittest.TestCase):
+    def test_broken_ebay_does_not_stop_other_offers(self):
+        from hawksense import tracker
+
+        class Broken:
+            api = None
+
+            def fetch(self, url, regex=None):
+                raise RuntimeError("boom")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "c.db")
+            t = Tracker(db, StubFX(), DESTINATIONS["IL"], ebay=Broken())
+            item = db.add_item("x")
+            t.add_offer(item, "https://www.ebay.com/itm/123456789012")
+            t.add_offer(item, "https://shop.example.com/p")
+            with mock.patch.object(tracker, "fetch_price", return_value=Extraction(10.0, "USD")):
+                results = t.check(item)
+        self.assertEqual(sorted(bool(r.extraction) for r in results), [False, True])

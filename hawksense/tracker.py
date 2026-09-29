@@ -90,7 +90,10 @@ class Tracker:
         out = {}
         for item in items:
             out[item.id] = self.check(item)
-            self.notifier.record_check(self, item, out[item.id])
+            try:
+                self.notifier.record_check(self, item, out[item.id])
+            except Exception:  # bookkeeping for one item must not stop the others
+                pass
         self.notifier.evaluate(self, items)
         return out
 
@@ -201,6 +204,9 @@ class Tracker:
                     ex = fetch_price(offer.url, offer.price_regex)
             except FetchError as exc:
                 results.append(CheckResult(offer, store, error=str(exc)))
+                continue
+            except Exception as exc:  # one broken store (eBay without keys, odd markup...) must not sink the rest
+                results.append(CheckResult(offer, store, error=f"{store.name}: {type(exc).__name__}: {exc}"))
                 continue
             ex.currency = (ex.currency or store.currency).upper()
             self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method)

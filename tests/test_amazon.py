@@ -23,6 +23,16 @@ class AmazonSearchTest(unittest.TestCase):
         with self.assertRaises(FetchError):
             parse_search_candidates("<html>tiny</html>", "amazon.co.uk")
 
+    def test_relevance_filter_keeps_the_product_and_drops_neighbours(self):
+        from hawksense.api import matches_query
+
+        q = "jbl live nc670"
+        self.assertTrue(matches_query(q, "JBL Live 670NC Wireless On-Ear Headphones, Adaptive NC - Black"))
+        self.assertTrue(matches_query(q, "JBL LIVE670NCBLK Live 670NC On-Ear Headphones"))
+        self.assertFalse(matches_query(q, "JBL Live 770NC - Wireless Over-Ear Headphones"))
+        self.assertFalse(matches_query(q, "JBL MA710 7.2 Channel AV Receiver"))
+        self.assertFalse(matches_query(q, None))
+
 
 if __name__ == "__main__":
     unittest.main()

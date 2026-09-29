@@ -226,7 +226,8 @@ class Api:
             for site, fut in zip(sites, futures):
                 try:
                     for ex in fut.result()[1]:
-                        results.append(api.search_candidate(ex, site))
+                        if api.matches_query(q, ex.title):
+                            results.append(api.search_candidate(ex, site))
                 except Exception as exc:  # noqa: BLE001 - any single-store failure is reported, not raised
                     errors.append({"store": site, "error": str(exc)})
         return {"results": results, "errors": errors}

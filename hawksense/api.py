@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from datetime import date, datetime, timedelta, timezone
 
 from hawksense import __version__
@@ -38,6 +40,17 @@ def stores() -> list[dict]:
              "shipping_flat": s.shipping_flat, "shipping_free_over": s.shipping_free_over,
              "collects_import_vat": s.collects_import_vat, "ships_abroad": s.ships_abroad, "notes": s.notes}
             for s in STORES.values()]
+
+
+def matches_query(query: str, title: str | None) -> bool:
+    """Does a listing title cover every word of the query? Model numbers match across word breaks and order
+    ("nc670" finds "Live 670NC"), so accessories and neighbouring models drop out."""
+    text = re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+    for tok in re.findall(r"[a-z0-9]+", query.lower()):
+        parts = re.findall(r"[a-z]+|\d+", tok)  # "nc670" -> nc, 670
+        if not all(p in text for p in parts):
+            return False
+    return True
 
 
 def _site_label(site: str) -> str:

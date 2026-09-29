@@ -56,6 +56,7 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   bell: '<path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>',
   box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  warn: '<path d="M12 4 2.8 20h18.4zM12 10v4.5M12 17.2v.1"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
 };
 const icon = (name, cls = 'icon') => raw(`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`);
@@ -119,6 +120,18 @@ function openPicker(title, body) {
   return { panel, close };
 }
 
+// a failure shown in place: a short "failed" line whose full error is a tooltip and expands on tap
+function failedNote(label, error) {
+  const msg = String(error || 'unknown error');
+  return html`<details class="fail-note" title="${msg}"><summary>${icon('warn')} ${label}</summary><p class="small">${msg}</p></details>`;
+}
+
+function checkFailures(it) {
+  const bad = state.checkErrors && state.checkErrors[it.id];
+  if (!bad || !bad.length) return '';
+  return html`<section class="card"><h3>Last check</h3>${bad.map((b) => failedNote(`${b.store} failed`, b.error))}</section>`;
+}
+
 function shippingNote(r) {
   if (r.shipping == null) return ' · shipping unknown';
   if (r.shipping === 0) return ' · free shipping';
@@ -134,7 +147,7 @@ async function productPickerSheet(query, onPick) {
   try {
     results = (await online('POST', 'api/search', { query })).results;
   } catch (e) {
-    body().innerHTML = str(html`<p class="muted center">Could not search: ${e.message}</p>`);
+    body().innerHTML = str(failedNote('Search failed', e.message));
     return;
   }
   if (!panel.isConnected) return; // closed while the search was in flight
@@ -444,6 +457,7 @@ function viewItem(id) {
       <button class="btn" type="button" data-action="check" ${!state.online || temp ? 'disabled' : ''} title="${state.online ? 'Fetch prices from the store pages' : 'Needs a connection'}">${icon('refresh')} Check</button>
     </div>
     ${adviceHero(it)}
+    ${checkFailures(it)}
     <section class="card"><h3>Price history</h3>${raw(chart.html)}</section>
     ${salesAhead(it)}
     ${quotesSection(it)}
@@ -1004,8 +1018,8 @@ function addOfferSheet(it) {
       toast(`${res.offers.length - before} store(s) added`);
       close();
     } catch (e) {
-      toast(`Could not search stores: ${e.message}`, { timeout: 7000 });
       searchBtn.disabled = false;
+      searchBtn.insertAdjacentHTML('afterend', str(failedNote('Search failed', e.message)));
     }
   };
 }
@@ -1115,9 +1129,13 @@ async function checkPrices(it) {
     const res = await online('POST', `api/items/${it.id}/check`);
     const ok = res.results.filter((r) => r.ok).length;
     const bad = res.results.filter((r) => !r.ok);
-    toast(`${ok} price${ok === 1 ? '' : 's'} updated${bad.length ? `, ${bad.length} failed (${bad.map((b) => b.store).join(', ')}). Log those by hand.` : ''}`, { timeout: 7000 });
+    state.checkErrors = { ...state.checkErrors, [it.id]: bad.map((b) => ({ store: b.store, error: b.error })) };
+    toast(`${ok} price${ok === 1 ? '' : 's'} updated${bad.length ? `, ${bad.length} failed` : ''}`);
+    render({ force: true });
   } catch (e) {
-    toast(`Could not check prices: ${e.message}`);
+    state.checkErrors = { ...state.checkErrors, [it.id]: [{ store: 'Check', error: e.message }] };
+    toast('Check failed');
+    render({ force: true });
   }
 }
 

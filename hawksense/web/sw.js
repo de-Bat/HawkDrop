@@ -2,7 +2,7 @@
 // Data is stored by the app itself in IndexedDB (see store.js), so API calls
 // always go to the network and the app decides what to do when they fail.
 
-const VERSION = 'hawksense-v13';
+const VERSION = 'hawksense-v14';
 // works under any prefix (e.g. https://home.example.com/hawksense/)
 const API_PREFIX = new URL('api/', self.registration.scope).pathname;
 const SHELL = [

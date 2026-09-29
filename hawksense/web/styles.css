@@ -444,3 +444,7 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, .icon-btn:focus-visib
   ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 }
+
+.fail-note { color: var(--wait); margin: .25rem 0; }
+.fail-note summary { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
+.fail-note p { margin: .25rem 0 0; overflow-wrap: anywhere; user-select: text; }

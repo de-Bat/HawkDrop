@@ -100,8 +100,20 @@ class ApiTest(ServerTest):
         with unittest.mock.patch("hawksense.ebay.fetch_html", return_value=SEARCH_PAGE):
             status, res = self.call("POST", "/api/search", {"query": "headphones"})
         self.assertEqual(status, 200)
-        self.assertEqual([r["title"] for r in res["results"]], ["Headphones B", "Headphones A"])
+        self.assertEqual([r["title"] for r in res["results"]][:2], ["Headphones B", "Headphones A"])
         self.assertEqual(res["results"][0]["store"], "eBay")
+        self.assertEqual(res["errors"], [])
+        # one store failing must not fail the search
+        def flaky(url, *a, **k):
+            if "ebay.com" in url:
+                return SEARCH_PAGE
+            raise FetchError("blocked")
+
+        with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=flaky):
+            status, res = self.call("POST", "/api/search", {"query": "headphones"})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(res["results"]), 2)
+        self.assertEqual(sorted(e["store"] for e in res["errors"]), ["ebay.co.uk", "ebay.de"])
         with unittest.mock.patch("hawksense.ebay.fetch_html", side_effect=FetchError("blocked")):
             self.assertEqual(self.call("POST", "/api/search", {"query": "headphones"})[0], 502)
 

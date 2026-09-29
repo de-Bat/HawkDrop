@@ -144,15 +144,18 @@ async function productPickerSheet(query, onPick) {
   const { panel, close } = openPicker(`Search results · ${query}`, html`<p class="muted center">Searching stores for “${query}”…</p>`);
   const body = () => panel.querySelector('.sheet-body');
   let results;
+  let errors = [];
   try {
-    results = (await online('POST', 'api/search', { query })).results;
+    ({ results, errors = [] } = await online('POST', 'api/search', { query }));
   } catch (e) {
     body().innerHTML = str(failedNote('Search failed', e.message));
     return;
   }
   if (!panel.isConnected) return; // closed while the search was in flight
+  // stores that failed are noted, never fatal: the ones that answered still show
+  const failed = errors.map((x) => failedNote(`${x.store} failed`, x.error));
   if (!results.length) {
-    body().innerHTML = str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>`);
+    body().innerHTML = str(html`<p class="muted center">No matches for “${query}”. Try a shorter or different name, or paste a link instead.</p>${failed}`);
     return;
   }
   const rows = results.map((r, i) => html`<li><button type="button" class="pick-row" data-i="${i}">
@@ -161,7 +164,7 @@ async function productPickerSheet(query, onPick) {
         <div class="small muted">${r.store}${shippingNote(r)}</div></div>
       <div class="pick-price">${money(r.price, r.currency)}</div>
     </button></li>`);
-  body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>`);
+  body().innerHTML = str(html`<ul class="plain pick-list">${rows}</ul>${failed}`);
   body().querySelectorAll('.pick-row').forEach((btn) => {
     btn.onclick = () => { onPick(results[Number(btn.dataset.i)]); close(); };
   });

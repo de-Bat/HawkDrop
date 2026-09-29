@@ -40,9 +40,10 @@ def stores() -> list[dict]:
             for s in STORES.values()]
 
 
-def search_candidate(ex: Extraction) -> dict:
+def search_candidate(ex: Extraction, site: str = "ebay.com") -> dict:
     return {"title": ex.title, "price": _r(ex.price), "currency": ex.currency, "url": ex.url,
-            "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock, "store": "eBay"}
+            "image": ex.image, "shipping": _r(ex.shipping), "in_stock": ex.in_stock,
+            "store": "eBay" if site == "ebay.com" else f"eBay ({site.removeprefix('ebay.')})"}
 
 
 def forwarder(f: Forwarder) -> dict:

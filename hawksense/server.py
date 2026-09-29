@@ -18,6 +18,7 @@ import ssl
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
@@ -25,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
-from hawksense import __version__, api, rules
+from hawksense import __version__, api, ebay, rules
 from hawksense import settings as app_settings
 from hawksense.config import Config
 from hawksense.currency import FX
@@ -210,11 +211,25 @@ class Api:
         condition = _str(body, "condition")
         if condition not in (None, "new", "used", "any"):
             raise ApiError(400, "'condition' must be new, used or any")
-        try:
-            found = t.ebay.search_candidates(q, None if condition in (None, "any") else condition)
-        except FetchError as exc:
-            raise ApiError(502, str(exc)) from None
-        return {"results": [api.search_candidate(ex) for ex in found]}
+        cond = None if condition in (None, "any") else condition
+        sites = list(ebay.SITES)
+        results, errors = [], []
+
+        def one(site):
+            return site, t.ebay.search_candidates(q, cond, site)
+
+        # every store is searched independently: one failing (blocked, down, changed markup) must not sink the rest
+        with ThreadPoolExecutor(max_workers=len(sites)) as pool:
+            futures = [pool.submit(one, site) for site in sites]
+            for site, fut in zip(sites, futures):
+                try:
+                    for ex in fut.result()[1]:
+                        results.append(api.search_candidate(ex, site))
+                except Exception as exc:  # noqa: BLE001 - any single-store failure is reported, not raised
+                    errors.append({"store": site, "error": str(exc)})
+        if not results and errors and len(errors) == len(sites):
+            raise ApiError(502, "; ".join(f"{e['store']}: {e['error']}" for e in errors))
+        return {"results": results, "errors": errors}
 
     @staticmethod
     @route("POST", r"/api/items")

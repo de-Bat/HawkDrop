@@ -45,6 +45,26 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual((s.weight_kg, s.weight_kind), (0.25, "package"))
         self.assertEqual((s.dims_cm, s.dims_kind), ((26.0, 22.0, 9.0), "package"))
 
+    def test_amazon_de_labels_and_decimal_comma(self):
+        page = ('<ul><li><span class="a-text-bold">Produktabmessungen &lrm; : &lrm;</span>'
+                '<span>19,3 x 17 x 8,3 cm; 340 Gramm</span></li>'
+                '<li><span class="a-text-bold">Artikelgewicht &lrm; : &lrm;</span><span>340 g</span></li></ul>')
+        s = extract_specs(page)
+        self.assertEqual((s.weight_kg, s.dims_cm), (0.34, (19.3, 17.0, 8.3)))
+        boxed = '<table><tr><th>Verpackungsabmessungen</th><td>25 x 20 x 10 cm; 0,5 Kilogramm</td></tr></table>'
+        s = extract_specs(boxed)
+        self.assertEqual((s.dims_kind, s.dims_cm, s.weight_kg), ("package", (25, 20, 10), 0.5))
+
+    def test_amazon_uk_row(self):
+        s = extract_specs('<table><tr><th>Product Dimensions</th><td>19.3 x 17 x 8.3 cm; 340 g</td></tr></table>')
+        self.assertEqual((s.weight_kg, s.dims_cm), (0.34, (19.3, 17.0, 8.3)))
+
+    def test_lettered_and_by_dimensions(self):
+        self.assertEqual(parse_dimensions('3.94"D x 2.36"W x 1.97"H'), (10.0, 6.0, 5.0))
+        self.assertEqual(parse_dimensions("5 by 3 by 2 inches"), (12.7, 7.6, 5.1))
+        self.assertEqual(parse_dimensions("2.4″D x 3″W x 1″H"), (6.1, 7.6, 2.5))
+        self.assertEqual(parse_weight("1,2 Kilogramm"), 1.2)
+
     def test_hebrew_spec_list(self):
         s = extract_specs(KSP)
         self.assertEqual((s.weight_kg, s.dims_cm, s.weight_kind), (0.25, (26, 22, 9), "item"))

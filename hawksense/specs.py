@@ -32,7 +32,7 @@ AGREE = 0.15  # relative spread for sources to count as agreeing
 CONFLICT = 0.30  # box volumes this close still agree (small differences on three sides add up)
 
 _WEIGHT_UNITS = {
-    "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0, "ק\"ג": 1.0, "קג": 1.0, "קילו": 1.0,
+    "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0, "kilogramm": 1.0, "gramm": 0.001, "ק\"ג": 1.0, "קג": 1.0, "קילו": 1.0,
     "g": 0.001, "gr": 0.001, "gram": 0.001, "grams": 0.001, "גרם": 0.001,
     "lb": 0.45359237, "lbs": 0.45359237, "pound": 0.45359237, "pounds": 0.45359237,
     "oz": 0.028349523, "ounce": 0.028349523, "ounces": 0.028349523,
@@ -41,22 +41,25 @@ _LENGTH_UNITS = {"cm": 1.0, "ס\"מ": 1.0, "mm": 0.1, "מ\"מ": 0.1, "in": 2.54,
 _UNIT_CODES = {"kgm": "kg", "grm": "g", "lbr": "lb", "onz": "oz", "cmt": "cm", "mmt": "mm", "inh": "in", "mtr": "m"}
 
 _NUM = r"(\d+(?:[.,]\d+)?)"
-_WEIGHT_RE = re.compile(_NUM + r"\s*(kilograms?|kgs?|grams?|gr|g|pounds?|lbs?|ounces?|oz|ק\"ג|קג|קילו|גרם)(?![a-z])",
+_WEIGHT_RE = re.compile(_NUM + r"\s*(kilogramm?|kilograms?|kgs?|gramm?|grams?|gr|g|pounds?|lbs?|ounces?|oz|ק\"ג|קג|קילו|גרם)(?![a-z])",
                         re.I)
-_DIMS_RE = re.compile(_NUM + r"\s*(?:cm|mm|in|\")?\s*[x×*]\s*" + _NUM + r"\s*(?:cm|mm|in|\")?\s*[x×*]\s*" + _NUM
-                      + r"\s*(centimet(?:er|re)s?|cm|millimet(?:er|re)s?|mm|inch(?:es)?|in|\"|ס\"מ|מ\"מ)?", re.I)
+# Amazon writes sizes as '5 x 3 x 2 inches', '3.9"D x 2.4"W x 2"H' or '5 by 3 by 2 inches'
+_SEP = r"\s*(?:[dwhl](?![a-z]))?\s*(?:[x×*]|by)\s*"
+_UNIT = r"(?:centimet(?:er|re)s?|cm|millimet(?:er|re)s?|mm|inch(?:es)?|in(?![a-z])|\"|״|”|″|ס\"מ|מ\"מ)?"
+_DIMS_RE = re.compile(_NUM + r"\s*" + _UNIT + _SEP + _NUM + r"\s*" + _UNIT + _SEP + _NUM + r"\s*(" + _UNIT[3:], re.I)
 
 # Whole-label patterns (after lower-casing and dropping "(kg)"-style hints) -> kind.
 # Package/shipping values are what a forwarder weighs; "item" is the product alone.
 _WEIGHT_LABELS = [
-    (re.compile(r"(?:item |product )?(?:shipping|package|parcel|boxed|gross) weight|משקל (?:ה?אריזה|משלוח|ברוטו)"),
+    (re.compile(r"(?:item |product )?(?:shipping|package|parcel|boxed|gross) weight|versandgewicht|verpackungsgewicht|משקל (?:ה?אריזה|משלוח|ברוטו)"),
      "package"),
-    (re.compile(r"(?:item |product |net |unit )?weight|משקל(?: ה?מוצר| נטו)?"), "item"),
+    (re.compile(r"(?:item |product |net |unit )?weight|משקל(?: ה?מוצר| נטו)?|artikelgewicht|produktgewicht|gewicht"),
+     "item"),
 ]
 _DIMS_LABELS = [
     (re.compile(r"(?:item )?(?:package|shipping|box|parcel|boxed) (?:dimensions|size)(?: l ?x ?w ?x ?h)?"
-                r"|מידות (?:ה?אריזה|משלוח)"), "package"),
-    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)(?: l ?x ?w ?x ?h| w ?x ?h ?x ?d)?"
+                r"|verpackungsabmessungen|packungsabmessungen|מידות (?:ה?אריזה|משלוח)"), "package"),
+    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)|produktabmessungen|artikelabmessungen|abmessungen(?: l ?x ?w ?x ?h| w ?x ?h ?x ?d)?"
                 r"|מידות(?: ה?מוצר)?"), "item"),
 ]
 
@@ -92,6 +95,8 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
     if not m:
         return None
     unit = (m.group(4) or "cm").lower()
+    if unit in ("״", "”", "″"):
+        unit = '"'
     if unit.startswith("centimet"):
         unit = "cm"
     elif unit.startswith("millimet"):

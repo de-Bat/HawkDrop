@@ -61,10 +61,15 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual((ex.price, ex.currency, ex.title), (1019.0, "ILS", "Ninja AG653"))
 
     def test_newegg_buy_box(self):
-        page = ('<div class="price-current_2026"><span class="price-current-label"></span>$<strong>1,220</strong>'
+        page = ('<ul class="price"><li class="price-current"><span class="price-current-label"></span>$<strong>19</strong>'
+                '<sup>.99</sup></li></ul>'  # an add-on product listed before the buy box (seen on the live page)
+                '<div class="product-buy-box is-product-blackfriday-first"><div class="product-pane">'
+                '<div class="price-current_2026"><span class="price-current-label"></span>$<strong>1,220</strong>'
                 '<sup>.50</sup></div><div class="price-was"><span class="price-was-data">$279.00</span></div>')
         ex = extract_price(page, "https://www.newegg.com/p/N82E16819113844")
         self.assertEqual((ex.price, ex.currency, ex.method), (1220.5, "USD", "newegg-pattern"))
+        data_only = '<li class="price-current">$<strong>19</strong></li><script>{"FinalPrice":220,"Instock":true}</script>'
+        self.assertEqual(extract_price(data_only, "https://www.newegg.com/p/1").price, 220)
 
 
 if __name__ == "__main__":

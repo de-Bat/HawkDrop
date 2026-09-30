@@ -169,9 +169,10 @@ function viewList() {
     const best = it.best;
     const pendingN = (it.pending_prices || []).length;
     return html`<a class="card item-card" href="#/item/${it.id}">
+      ${it.image ? html`<img class="thumb" src="${imgSrc(it.image)}" alt="" loading="lazy">` : ''}
       <div class="item-main">
         <div class="item-title">${it.name}</div>
-        <div class="small muted">${it.category !== 'default' ? it.category : ''}${best ? html` · best at ${best.store}` : ''}${pendingN ? html` · <span class="pending-dot">${pendingN} pending</span>` : ''}</div>
+        <div class="small muted">${[it.category !== 'default' ? it.category : '', best ? `best at ${best.store}` : ''].filter(Boolean).join(' · ')}${pendingN ? html` · <span class="pending-dot">${pendingN} pending</span>` : ''}</div>
         <div class="item-verdict">${verdict(it.advice, { compact: true })}</div>
       </div>
       <div class="item-side">
@@ -233,6 +234,34 @@ function storeLabel(it, ref) {
   return ref.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
 }
 
+// images are served by HawkSense itself (content-addressed); an <img> can't send the token header
+function imgSrc(path) {
+  return path ? `${path}${state.token ? `?token=${encodeURIComponent(state.token)}` : ''}` : '';
+}
+
+const CONDITION_LABEL = { new: 'New', open_box: 'Open box', refurbished: 'Refurbished', used: 'Used', damaged: 'Damaged', for_parts: 'For parts' };
+const AVAILABILITY_LABEL = { limited: 'Few left', preorder: 'Pre-order', backorder: 'Back-order', out_of_stock: 'Out of stock', discontinued: 'Discontinued' };
+
+function listingChips(d) {
+  if (!d) return '';
+  const cond = d.condition ? html`<span class="chip tiny ${d.condition === 'new' ? '' : 'warn'}">${CONDITION_LABEL[d.condition] || d.condition}</span>` : '';
+  const avail = AVAILABILITY_LABEL[d.availability] ? html`<span class="chip tiny warn">${AVAILABILITY_LABEL[d.availability]}</span>` : '';
+  return cond || avail ? html` ${cond} ${avail}` : '';
+}
+
+function productCard(it) {
+  const withTitle = (it.quotes || []).map((q) => q.details || {}).filter((d) => d.title || d.description);
+  const d = withTitle.find((x) => x.description) || withTitle[0];
+  if (!it.image && !d) return '';
+  return html`<section class="card product">
+    ${it.image ? html`<img class="product-img" src="${imgSrc(it.image)}" alt="" loading="lazy">` : ''}
+    <div class="grow">
+      ${d && d.title ? html`<div class="product-title" dir="auto">${d.title}</div>` : ''}
+      ${d && d.description ? html`<details class="small" dir="auto"><summary class="muted">${d.description.slice(0, 110)}${d.description.length > 110 ? '…' : ''}</summary><p class="muted">${d.description}</p></details>` : ''}
+    </div>
+  </section>`;
+}
+
 function breakdown(l) {
   if (l.hold) return html`<p class="small warn-text">⚠ ${l.hold[0].toUpperCase() + l.hold.slice(1)}</p>`;
   const lines = l.lines && l.lines.length
@@ -265,7 +294,7 @@ function quotesSection(it) {
     return html`<li class="quote ${i === 0 && q.in_stock ? 'best' : ''} ${q.in_stock ? '' : 'oos'}">
       <details>
         <summary>
-          <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}
+          <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}${listingChips(q.details)}
             <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div>
             ${l.route && l.route !== 'direct' ? html`<div class="small via">${l.route_label}</div>` : ''}</div>
           <div class="q-total">${l.hold ? 'on hold' : money(l.total)}<div class="small muted">${l.hold ? 'set the weight' : 'delivered'}</div></div>
@@ -344,6 +373,7 @@ function viewItem(id) {
       <button class="btn" type="button" data-action="add-offer">${icon('store')} Add store</button>
       <button class="btn" type="button" data-action="check" ${!state.online || temp ? 'disabled' : ''} title="${state.online ? 'Fetch prices from the store pages' : 'Needs a connection'}">${icon('refresh')} Check</button>
     </div>
+    ${productCard(it)}
     ${adviceHero(it)}
     <section class="card"><h3>Price history</h3>${raw(chart.html)}</section>
     ${salesAhead(it)}

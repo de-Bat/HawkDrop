@@ -2,7 +2,8 @@
 // Data is stored by the app itself in IndexedDB (see store.js), so API calls
 // always go to the network and the app decides what to do when they fail.
 
-const VERSION = 'hawksense-v10';
+const VERSION = 'hawksense-v11';
+const IMAGES = 'hawksense-images'; // product images: content-addressed, kept across versions
 // works under any prefix (e.g. https://home.example.com/hawksense/)
 const API_PREFIX = new URL('api/', self.registration.scope).pathname;
 const SHELL = [
@@ -32,7 +33,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) if (key !== VERSION) await caches.delete(key);
+    for (const key of await caches.keys()) if (key !== VERSION && key !== IMAGES) await caches.delete(key);
     await self.clients.claim();
   })());
 });
@@ -50,6 +51,21 @@ async function clean(response) {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
+  if (req.method === 'GET' && url.origin === self.location.origin && /\/api\/images\/[0-9a-f]{64}$/.test(url.pathname)) {
+    // a key never changes content: cache first (works offline); cached without the ?token=
+    event.respondWith((async () => {
+      const cache = await caches.open(IMAGES);
+      const key = url.origin + url.pathname;
+      const cached = await cache.match(key);
+      if (cached) return cached;
+      try {
+        const res = await fetch(req);
+        if (res.ok) await cache.put(key, res.clone());
+        return res;
+      } catch { return new Response('', { status: 504 }); }
+    })());
+    return;
+  }
   if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith(API_PREFIX)) return;
 
   if (req.mode === 'navigate') {

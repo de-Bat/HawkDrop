@@ -205,6 +205,29 @@ class TokenTest(ServerTest):
         self.assertEqual(self.call("GET", "/api/snapshot?token=s3cret")[0], 200)
         self.assertEqual(self.call("GET", "/")[0], 200)
 
+    def test_product_images(self):
+        from hawksense.db import Database
+        from hawksense.product import Details
+        db = Database(Path(self.tmp.name) / "s.db")
+        item = db.add_item("Lamp")
+        offer = db.add_offer(item, "shop", "https://shop.com/lamp")
+        db.save_offer_details(offer, Details("Lamp", "https://shop.com/lamp.png"))
+        png, key = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20, "b" * 64
+        db.set_offer_image(offer.id, key, "image/png", png)
+        db.close()
+        self.assertEqual(self.call("GET", f"/api/images/{key}")[0], 401)  # the token is needed, as for all data
+        req = urllib.request.Request(f"{self.base}/api/images/{key}?token=s3cret")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual((res.read(), res.headers["Content-Type"]), (png, "image/png"))
+            self.assertEqual(res.headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(res.headers["Cross-Origin-Resource-Policy"], "same-origin")
+            self.assertIn("sandbox", res.headers["Content-Security-Policy"])
+            self.assertIn("immutable", res.headers["Cache-Control"])
+        self.assertEqual(self.call("GET", "/api/images/" + "c" * 64 + "?token=s3cret")[0], 404)
+        self.assertEqual(self.call("GET", "/api/images/../../etc?token=s3cret")[0], 404)
+        _, snap = self.call("GET", "/api/snapshot?token=s3cret")
+        self.assertEqual(snap["items"][0]["image"], f"api/images/{key}")
+
     def test_health_is_public(self):
         status, body = self.call("GET", "/api/health")
         self.assertEqual(status, 200)

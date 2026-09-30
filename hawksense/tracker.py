@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from hawksense.currency import FX
 from hawksense.db import Database, Item, Offer, PricePoint
 from hawksense.ebay import EbaySource, is_ebay
-from hawksense.fetch import Extraction, FetchError, fetch_html, fetch_price
+from hawksense.fetch import Extraction, FetchError, fetch_html, fetch_image, fetch_price
 from hawksense.forecast import Advice, Settings, advise
 from hawksense.forwarders import FORWARDERS, Account, Forwarder, Route, parse_dims
 from hawksense.landed import Destination, LandedCost, forwarded_cost, landed_cost
@@ -70,6 +70,7 @@ class Tracker:
         self._accounts: list[Account] | None = None
         self.config = None  # the Config this tracker was built from (from_config)
         self.notifier = Notifier(db)
+        self.fetch_images = True  # download product images during checks
 
     @classmethod
     def from_config(cls, db: Database, fx: FX, cfg, dest_code: str | None = None) -> "Tracker":
@@ -178,10 +179,25 @@ class Tracker:
             ex.currency = (ex.currency or store.currency).upper()
             self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method)
             self._save_specs(item, store.name, ex.url or offer.url, ex.specs)
+            self._save_details(offer, ex.details)
             results.append(CheckResult(offer, store, ex))
         if any(r.extraction for r in results):
             self.update_specs(item)
         return results
+
+    # ---- product details ------------------------------------------------------------------
+    def _save_details(self, offer: Offer, details) -> None:
+        """Title, image, description, condition and availability; the image is downloaded once."""
+        if not details:
+            return
+        self.db.save_offer_details(offer, details)
+        url = self.db.image_to_fetch(offer.id)
+        if url and self.fetch_images:
+            try:
+                key, mime, data = fetch_image(url)
+            except FetchError:
+                return  # the page still shows; the image is tried again on the next check
+            self.db.set_offer_image(offer.id, key, mime, data)
 
     # ---- weight / size --------------------------------------------------------------------
     def _save_specs(self, item: Item, source: str, url: str, specs) -> None:

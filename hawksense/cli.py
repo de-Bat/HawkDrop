@@ -20,6 +20,7 @@ from hawksense.ebay import SITES as EBAY_SITES, search_url
 from hawksense.forecast import Advice
 from hawksense.forwarders import Forwarder, parse_dims, state_from_address
 from hawksense.landed import LandedCost
+from hawksense.product import AVAILABILITY_LABELS, CONDITION_LABELS
 from hawksense.stores import STORES
 from hawksense.tracker import Quote, Tracker
 
@@ -99,12 +100,19 @@ def _print_check(tracker: Tracker, item: Item, results=None):
         if r.error:
             print(f"  ✗ {r.store.name:<22} {r.error}")
         else:
-            ex = r.extraction
-            stock = "" if ex.in_stock else " (out of stock)"
+            ex, d = r.extraction, r.extraction.details
+            state = [CONDITION_LABELS[d.condition]] if d and d.condition and d.condition != "new" else []
+            if d and d.availability and d.availability != "in_stock":
+                state.append(AVAILABILITY_LABELS[d.availability])
+            elif not ex.in_stock:
+                state.append("out of stock")
+            stock = f" ({', '.join(state)})" if state else ""
             ship = f" + {money(ex.shipping, ex.currency)} shipping" if ex.shipping else ""
             print(f"  ✓ {r.store.name:<22} {money(ex.price, ex.currency)}{ship}{stock}  [{ex.method}]")
             if ex.url and ex.url != r.offer.url:
                 print(f"    {ex.title or 'listing'}: {ex.url}")
+            elif d and d.title:
+                print(f"    {d.title[:100]}")
 
 
 def _dims_arg(value: str | None) -> str | None:

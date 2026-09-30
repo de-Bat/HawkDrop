@@ -4,7 +4,10 @@ Extraction order:
 1. a custom regex set on the offer (first capture group is the price),
 2. schema.org ``Product`` JSON-LD (used by most modern shops, incl. many Israeli ones),
 3. ``product:price:amount`` / ``og:price:amount`` meta tags and ``itemprop="price"`` microdata,
-4. a few store-specific patterns (Amazon, eBay).
+4. a few store-specific patterns (Amazon, eBay, Newegg).
+
+The same page also gives the weight and size (``hawksense.specs``) and the product's title,
+image, description, condition and availability (``hawksense.product``).
 
 eBay listings and searches go through ``hawksense.ebay`` (official API when configured).
 
@@ -43,6 +46,18 @@ class Extraction:
     method: str = ""
     url: str | None = None  # the listing actually priced (e.g. the cheapest eBay search result)
     specs: object | None = None  # hawksense.specs.Specs read from the same page, if any
+    details: object | None = None  # hawksense.product.Details: title, image, description, condition, availability
+
+
+def add_details(ex: Extraction, page: str, url: str) -> Extraction:
+    """Attach the page's product details; an unavailable item is out of stock whatever the price says."""
+    from hawksense.product import UNAVAILABLE, extract_details
+
+    ex.details = extract_details(page, url)
+    ex.title = ex.title or ex.details.title
+    if ex.details.availability in UNAVAILABLE:
+        ex.in_stock = False
+    return ex
 
 
 def fetch_html(url: str, timeout: float = 20.0) -> str:
@@ -60,6 +75,25 @@ def fetch_html(url: str, timeout: float = 20.0) -> str:
     except Exception as exc:  # urllib raises many types; surface one
         raise FetchError(f"could not fetch {url}: {exc}") from exc
     return raw.decode(charset, errors="replace")
+
+
+def fetch_image(url: str, timeout: float = 15.0) -> tuple[str, str, bytes]:
+    """Download a product image -> (content key, mime type, bytes). Only real raster images are kept."""
+    from hawksense.product import IMAGE_MAX, image_key, image_type
+
+    headers = {"User-Agent": USER_AGENT, "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8"}
+    try:
+        data, _ = netguard.fetch(url, headers, timeout)
+    except netguard.BlockedAddress as exc:
+        raise FetchError(f"won't fetch {url}: {exc}") from None
+    except Exception as exc:
+        raise FetchError(f"could not fetch {url}: {exc}") from exc
+    if len(data) > IMAGE_MAX:
+        raise FetchError(f"image larger than {IMAGE_MAX // (1024 * 1024)} MB: {url}")
+    mime = image_type(data)
+    if not mime:
+        raise FetchError(f"not a JPEG/PNG/GIF/WebP/AVIF image: {url}")
+    return image_key(data), mime, data
 
 
 def parse_number(text: str) -> float | None:
@@ -207,9 +241,11 @@ _STORE_PATTERNS = {
         ('id="corePrice', r'<span class="a-offscreen">([^<]{1,40})</span>'),
         ('<span class="a-price', r'^[^"]{0,200}"[^>]{0,300}><span class="a-offscreen">([^<]{1,40})</span>'),
     ],
-    "newegg.": [  # $<strong>220</strong><sup>.00</sup>; the first one is the item's buy box
-        ('class="price-current',
-         r'^[^>]{0,100}>(?:\s*<span[^>]{0,100}></span>)?\s*([$]?)\s*<strong>([\d,]{1,12})</strong>\s*<sup>(\.\d{1,2})?</sup>'),
+    "newegg.": [  # the item's buy box ($<strong>220</strong><sup>.00</sup>) - other products' prices come earlier
+        ('class="product-buy-box',
+         r'class="price-current[^"]{0,20}"[^>]{0,100}>(?:\s*<span[^>]{0,100}></span>)?\s*([$]?)\s*<strong>([\d,]{1,12})'
+         r'</strong>\s*<sup>(\.\d{1,2})?</sup>'),
+        ('"FinalPrice":', r'^([\d.]{1,12}),"Instock"'),  # the item's own record in the page data
     ],
     "ebay.": [
         ('<div class="x-price-primary"', r'<span class="ux-textspans">([^<]{1,40})</span>'),
@@ -268,4 +304,4 @@ def fetch_price(url: str, price_regex: str | None = None) -> Extraction:
     page = fetch_html(url)
     ex = extract_price(page, url, price_regex)
     ex.specs = extract_specs(page)
-    return ex
+    return add_details(ex, page, url)

@@ -81,13 +81,22 @@ def landed(lc: LandedCost) -> dict:
             "lines": [[label, _r(v)] for label, v in lc.lines]}
 
 
-def quote(q: Quote) -> dict:
+def details(row: dict | None) -> dict:
+    """What the store page says about the product (empty when it hasn't been checked)."""
+    row = row or {}
+    return {"title": row.get("title"), "description": row.get("description"), "condition": row.get("condition"),
+            "availability": row.get("availability"),
+            "image": f"api/images/{row['image_key']}" if row.get("image_key") else None}
+
+
+def quote(q: Quote, info: dict | None = None) -> dict:
     return {
         "offer_id": q.offer.id, "store_key": q.store.key, "store": q.store.name, "country": q.store.country,
         "url": q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
         "seen": q.point.ts.isoformat(), "source": q.point.source,
         "landed": landed(q.landed),
         "routes": [landed(lc) for lc in q.routes],
+        "details": details(info),
     }
 
 
@@ -159,6 +168,7 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
     adv, quotes = t.advise(item, today)
     series = [(d, p) for d, p in t.daily_series(item, today) if d >= today - timedelta(days=history_days)]
     offers = []
+    info = t.db.offer_details(item)
     quoted = {q.offer.id for q in quotes}
     for o in t.db.offers(item):
         s = t.store_for(o)
@@ -175,8 +185,10 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
         "id": item.id, "name": item.name, "category": item.category, "target_price": item.target_price,
         "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at, "muted": item.muted,
         "specs": specs(t, item),
-        "best": quote(quotes[0]) if quotes else None,
-        "quotes": [quote(q) for q in quotes],
+        "image": next((f"api/images/{info[o.id]['image_key']}" for o in t.db.offers(item)
+                       if info.get(o.id, {}).get("image_key")), None),
+        "best": quote(quotes[0], info.get(quotes[0].offer.id)) if quotes else None,
+        "quotes": [quote(q, info.get(q.offer.id)) for q in quotes],
         "offers": offers,
         "advice": advice(adv),
         "history": [[d.isoformat(), _r(p)] for d, p in series],
@@ -207,6 +219,8 @@ def check_results(results: list[CheckResult]) -> list[dict]:
         if r.extraction:
             ex = r.extraction
             d.update(price=ex.price, currency=ex.currency, in_stock=ex.in_stock, method=ex.method,
-                     shipping=ex.shipping, listing=ex.url, title=ex.title)
+                     shipping=ex.shipping, listing=ex.url, title=ex.title,
+                     condition=getattr(ex.details, "condition", None),
+                     availability=getattr(ex.details, "availability", None))
         out.append(d)
     return out

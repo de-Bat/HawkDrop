@@ -340,3 +340,12 @@ details.card.fold[open] > summary { margin-bottom: 4px; }
 .field-help { display: block; font-weight: 400; font-size: 12px; margin-top: 4px; color: var(--muted); }
 label.check.inline { display: inline-flex; margin: 0; font-weight: 400; }
 input:disabled, select:disabled { opacity: 0.6; }
+
+/* product details from the store pages */
+.thumb { width: 48px; height: 48px; object-fit: contain; border-radius: 8px; background: #fff; flex: none; }
+.card.product { display: flex; gap: 12px; align-items: flex-start; }
+.product-img { width: 88px; height: 88px; object-fit: contain; border-radius: 10px; background: #fff; flex: none; }
+.product-title { font-weight: 600; font-size: 14px; line-height: 1.35; margin-bottom: 4px; }
+.card.product details summary { cursor: pointer; list-style: none; }
+.card.product details summary::-webkit-details-marker { display: none; }
+.card.product details[open] summary { display: none; }

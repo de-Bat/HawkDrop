@@ -101,6 +101,22 @@ CREATE TABLE IF NOT EXISTS rule_changes (
     status TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS offer_details (
+    offer_id INTEGER PRIMARY KEY REFERENCES offers(id) ON DELETE CASCADE,
+    title TEXT,
+    image_url TEXT,
+    image_key TEXT,
+    description TEXT,
+    condition TEXT,
+    availability TEXT,
+    ts TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS images (
+    key TEXT PRIMARY KEY,
+    mime TEXT NOT NULL,
+    data BLOB NOT NULL,
+    ts TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fx (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     rates TEXT NOT NULL,
@@ -326,6 +342,49 @@ class Database:
         d = dict(row)
         d["active"] = bool(d["active"])
         return Offer(**d)
+
+    # ---- product details (title, image, description, condition, availability) ----------
+    def save_offer_details(self, offer: Offer, details) -> None:
+        """Keep what the page said; a field it left out this time keeps its last known value,
+        except availability, which is only as good as the latest check."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO offer_details (offer_id, title, image_url, description, condition, availability, ts)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (offer_id) DO UPDATE SET
+                     title = COALESCE(excluded.title, title),
+                     image_key = CASE WHEN excluded.image_url IS NOT NULL AND excluded.image_url IS NOT image_url
+                                      THEN NULL ELSE image_key END,
+                     image_url = COALESCE(excluded.image_url, image_url),
+                     description = COALESCE(excluded.description, description),
+                     condition = COALESCE(excluded.condition, condition),
+                     availability = excluded.availability, ts = excluded.ts""",
+                (offer.id, details.title, details.image, details.description, details.condition,
+                 details.availability, now_utc().isoformat()))
+
+    def offer_details(self, item: Item) -> dict[int, dict]:
+        rows = self.conn.execute(
+            "SELECT d.* FROM offer_details d JOIN offers o ON o.id = d.offer_id WHERE o.item_id = ?", (item.id,))
+        return {r["offer_id"]: dict(r) for r in rows}
+
+    def image_to_fetch(self, offer_id: int) -> str | None:
+        """The offer's image URL when it hasn't been downloaded yet."""
+        row = self.conn.execute("SELECT image_url FROM offer_details WHERE offer_id = ? AND image_key IS NULL",
+                                (offer_id,)).fetchone()
+        return row["image_url"] if row else None
+
+    def set_offer_image(self, offer_id: int, key: str, mime: str, data: bytes) -> None:
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO images (key, mime, data, ts) VALUES (?, ?, ?, ?)",
+                              (key, mime, data, now_utc().isoformat()))
+            self.conn.execute("UPDATE offer_details SET image_key = ? WHERE offer_id = ?", (key, offer_id))
+            # images no offer shows any more
+            self.conn.execute("DELETE FROM images WHERE key NOT IN "
+                              "(SELECT image_key FROM offer_details WHERE image_key IS NOT NULL)")
+
+    def image(self, key: str) -> tuple[str, bytes] | None:
+        row = self.conn.execute("SELECT mime, data FROM images WHERE key = ?", (key,)).fetchone()
+        return (row["mime"], bytes(row["data"])) if row else None
 
     # ---- prices ------------------------------------------------------------
     def add_price(self, offer: Offer, price: float, currency: str, shipping: float | None = None,

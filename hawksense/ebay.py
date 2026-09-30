@@ -33,7 +33,10 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from hawksense.fetch import Extraction, FetchError, extract_price, fetch_html, guess_currency, parse_number
+from hawksense.fetch import (Extraction, FetchError, add_details, extract_price, fetch_html, guess_currency,
+                             parse_number)
+from hawksense.product import (DESCRIPTION_MAX, Details, availability_of, clean_image, clean_text, clean_title,
+                               condition_of)
 from hawksense.specs import extract_specs, specs_from_pairs
 from hawksense.vault import Vault, VaultError
 
@@ -178,9 +181,11 @@ class EbayApi:
             raise EbayError("eBay API: listing has no fixed price (auction?)")
         status = " ".join(a.get("estimatedAvailabilityStatus", "") for a in data.get("estimatedAvailabilities") or [])
         aspects = [(a.get("name", ""), a.get("value", "")) for a in data.get("localizedAspects") or []]
-        return Extraction(price, currency, "OUT_OF_STOCK" not in status or "IN_STOCK" in status,
-                          _shipping(data.get("shippingOptions"), currency), data.get("title"), "ebay-api",
-                          url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"))
+        ex = Extraction(price, currency, "OUT_OF_STOCK" not in status or "IN_STOCK" in status,
+                        _shipping(data.get("shippingOptions"), currency), data.get("title"), "ebay-api",
+                        url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"))
+        ex.details = _api_details(data, status)
+        return ex
 
     def search(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US") -> Extraction:
         filters = ["buyingOptions:{FIXED_PRICE}"]
@@ -194,9 +199,24 @@ class EbayApi:
             if price is None:
                 continue
             ship = _shipping(s.get("shippingOptions"), currency)
-            found.append(Extraction(price, currency, True, ship, s.get("title"), "ebay-api search",
-                                    url=s.get("itemWebUrl")))
+            ex = Extraction(price, currency, True, ship, s.get("title"), "ebay-api search", url=s.get("itemWebUrl"))
+            ex.details = _api_details(s)
+            found.append(ex)
         return _cheapest(found, query)
+
+
+def _api_details(data: dict, status: str = "") -> Details:
+    """Title, image, condition and availability of an eBay Browse API item or search result."""
+    image = (data.get("image") or {}).get("imageUrl") or next(
+        (i.get("imageUrl") for i in data.get("additionalImages") or [] if isinstance(i, dict)), None)
+    available = [a.get("availableQuantity") for a in data.get("estimatedAvailabilities") or []
+                 if isinstance(a.get("availableQuantity"), int)]
+    availability = availability_of(status.split()[0]) if status.strip() else None
+    if availability == "in_stock" and available and max(available) <= 3:
+        availability = "limited"
+    return Details(clean_title(data.get("title")), clean_image(image),
+                   clean_text(data.get("shortDescription"), DESCRIPTION_MAX),
+                   condition_of(data.get("conditionId")) or condition_of(data.get("condition")), availability)
 
 
 def _cheapest(found: list[Extraction], query: str) -> Extraction:
@@ -216,6 +236,8 @@ _SHIP_RE = re.compile(r'class="[^"]*s-(?:item__shipping|item__logisticsCost|card
                       re.S)
 _TITLE_RE = re.compile(r'class="[^"]*s-(?:item|card)__title[^"]*"[^>]*>(?:<span[^>]*>)?(.*?)</', re.S)
 _TAGS_RE = re.compile(r"<[^>]+>")
+_IMG_RE = re.compile(r'<img\b[^>]{0,500}?\bsrc="(https://i\.ebayimg\.com/[^"]{1,500})"')
+_CONDITION_RE = re.compile(r'class="[^"]*(?:SECONDARY_INFO|s-card__subtitle)[^"]*"[^>]*>(.{0,200}?)</span>', re.S)
 
 
 def _text(fragment: str) -> str:
@@ -257,8 +279,12 @@ def parse_search_page(page: str, currency: str | None = None) -> Extraction:
             elif re.search(r"\d", ship_text):
                 shipping = parse_number(ship_text)
         title = _TITLE_RE.search(block)
-        found.append(Extraction(value, guess_currency(price_text) or currency, True, shipping,
-                                _text(title.group(1)) if title else None, "ebay-search-page", url=url))
+        ex = Extraction(value, guess_currency(price_text) or currency, True, shipping,
+                        _text(title.group(1)) if title else None, "ebay-search-page", url=url)
+        image, condition = _IMG_RE.search(block), _CONDITION_RE.search(block)
+        ex.details = Details(clean_title(ex.title), clean_image(image.group(1)) if image else None, None,
+                             condition_of(_text(condition.group(1))) if condition else None)
+        found.append(ex)
     if not found:
         if re.search(r"captcha|robot|pardon our interruption", page, re.I):
             raise FetchError("eBay blocked the request - add eBay API keys (see README) or log the price manually")
@@ -297,7 +323,7 @@ class EbaySource:
             ex = extract_price(page, url, price_regex)
             ex.currency = ex.currency or currency
             ex.specs = extract_specs(page)
-            return ex
+            return add_details(ex, page, url)
         except FetchError as exc:
             if api_error:
                 raise FetchError(f"{api_error}; page: {exc}") from None

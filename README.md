@@ -23,6 +23,9 @@ shipping, customs duty, VAT and courier fees included. It then tells you whether
   insurance and service fees, US sales tax at the warehouse's state, and who pays import tax.
 - **Weight and size from the store pages**, cross-checked between stores, with an alert
   when they're missing or disagree.
+- **Product details from the store pages**: title, photo, description, condition (new, open
+  box, refurbished, used...) and availability (in stock, few left, pre-order, back-order...),
+  for Amazon, eBay, AliExpress, Newegg and any store that publishes standard product data.
 - **Rules that stay current**: taxes and forwarder rates are checked for updates
   automatically, odd changes wait for your OK, and you can change any of them by hand.
 - **Notifications** by email, Telegram, WhatsApp, ntfy push, webhook or in the app, for the
@@ -194,6 +197,29 @@ hawksense track "WH-1000XM5" --weight 1.1 --dims 26x22x9       # set it yourself
 The `specs_alert` notification tells you too, once per set of values. In the web app, the
 item page's **Weight & size** card shows what each page said, what to confirm (with a
 **Looks right** button), or why forwarder prices are on hold.
+
+## Product details
+
+Every `check` also reads what the store page says about the product:
+
+| Detail | Where it comes from |
+|---|---|
+| title, photo, description | schema.org product data, then store-specific markup, then OpenGraph tags and the page title |
+| condition | `new`, `open_box`, `refurbished`, `used`, `damaged`, `for_parts`: from schema.org (`UsedCondition`...), eBay condition ids, or wording ("Renewed", "Pre-owned", "Open box") |
+| availability | `in_stock`, `limited`, `preorder`, `backorder`, `out_of_stock`, `discontinued`: from schema.org (`PreOrder`...) or wording ("Only 2 left", "Currently unavailable", "This listing has ended") |
+
+Store-specific markup is read for Amazon (title, main photo, feature bullets, availability,
+"Renewed"), eBay (listing pages, search results and the official API), AliExpress and Newegg.
+Any other store that publishes schema.org or OpenGraph data works too.
+
+An out-of-stock or discontinued listing counts as out of stock even if the page still shows a
+price. `check` prints a listing's condition and availability when they're not "new" and "in
+stock"; the app shows them as tags on each store, and the item's photo and description at the
+top of its page.
+
+Photos are downloaded once by the server (JPEG, PNG, GIF, WebP or AVIF only, up to 2 MB) and
+served from its own database, so the app shows them offline too and stores never see your
+phone's address.
 
 ## Keeping taxes and forwarder rates current
 

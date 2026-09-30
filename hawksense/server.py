@@ -175,6 +175,13 @@ def route(method: str, pattern: str):
     return deco
 
 
+@dataclass
+class Binary:
+    """A non-JSON response (a product image)."""
+    mime: str
+    data: bytes
+
+
 class Api:
     """Route handlers. Each gets a fresh Tracker, the path params and the JSON body."""
 
@@ -182,6 +189,14 @@ class Api:
     @route("GET", r"/api/health")
     def health(t, body, query):
         return {"ok": t.db.healthy(), "version": __version__, "last_check": t.db.get_kv("last_auto_check")}
+
+    @staticmethod
+    @route("GET", r"/api/images/([0-9a-f]{64})")
+    def get_image(t, body, query, key):
+        found = t.db.image(key)
+        if not found:
+            raise ApiError(404, "no such image")
+        return Binary(*found)
 
     @staticmethod
     @route("GET", r"/api/meta")
@@ -548,6 +563,11 @@ class Handler(BaseHTTPRequestHandler):
         t = self.ctx.tracker()
         try:
             result = getattr(Api, name)(t, body, query, *match.groups())
+            if isinstance(result, Binary):  # content-addressed: the same key never changes
+                return self._send(200, result.data, result.mime, {
+                    "Cache-Control": "private, max-age=31536000, immutable",
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                    "Cross-Origin-Resource-Policy": "same-origin"})
             self._json(201 if method == "POST" and name in ("create_item",) else 200, result)
         except ApiError as exc:
             self._json(exc.status, {"error": str(exc)})

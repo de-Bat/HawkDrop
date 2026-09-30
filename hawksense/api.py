@@ -162,7 +162,8 @@ def quote(q: Quote, all_routes: list[LandedCost] | None = None) -> dict:
     return {
         "offer_id": q.offer.id, "store_key": q.store.key, "store": q.store.name, "country": q.store.country,
         "url": q.point.listing_url or q.offer.url, "price": q.point.price, "currency": q.point.currency, "in_stock": q.point.in_stock,
-        "seen": q.point.ts.isoformat(), "source": q.point.source,
+        "seen": q.point.ts.isoformat(), "source": q.point.source, "title": q.offer.title,
+        "condition": q.point.condition, "availability": q.point.availability,
         "landed": landed(q.landed),
         # every capable forwarder, including ones you haven't set up yet (marked "set_up": false)
         "routes": [landed(lc) for lc in (all_routes if all_routes is not None else q.routes)],
@@ -242,7 +243,7 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
         s = t.store_for(o)
         offers.append({"id": o.id, "store_key": s.key, "store": s.name, "url": o.url, "shipping": o.shipping,
                        "shipping_currency": o.shipping_currency, "local_shipping": o.local_shipping,
-                       "has_regex": bool(o.price_regex), "has_prices": o.id in quoted})
+                       "has_regex": bool(o.price_regex), "has_prices": o.id in quoted, "title": o.title})
     keys = {e for o in t.db.offers(item) for e in t.store_for(o).events}
     windows = []
     if series:
@@ -254,7 +255,7 @@ def item_detail(t: Tracker, item: Item, today: date | None = None, history_days:
     return {
         "id": item.id, "name": item.name, "category": item.category, "target_price": item.target_price,
         "weight_kg": item.weight_kg, "dims": item.dims, "created_at": item.created_at, "muted": item.muted,
-        "image_url": item.image_url,
+        "image_url": item.image_url, "description": item.description,
         "specs": specs(t, item),
         "best": quotes_json[0] if quotes_json else None,
         "quotes": quotes_json,

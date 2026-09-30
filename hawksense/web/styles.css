@@ -458,6 +458,11 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, .icon-btn:focus-visib
 .fail-note { color: var(--wait); margin: .25rem 0; }
 .fail-note summary { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 .fail-note summary .icon { width: 16px; height: 16px; flex: none; }
+.q-title { color: var(--text); opacity: .8; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-store { min-width: 0; }
+.item-desc { margin: -4px 0 12px; }
+.item-desc summary { cursor: pointer; }
+.item-desc p { margin: 6px 0 0; color: var(--text); }
 .did-you-mean { margin-top: 14px; }
 .fail-note.quiet { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
 .fail-note p { margin: .25rem 0 0; overflow-wrap: anywhere; user-select: text; }

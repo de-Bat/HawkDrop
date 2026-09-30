@@ -123,6 +123,7 @@ class Item:
     specs_status: str | None = None  # last consensus: verified | unverified | conflict | missing
     muted: bool = False  # no notifications about this item
     image_url: str | None = None  # picture read from a store page, or set by you
+    description: str | None = None  # short product description read from a store page
 
 
 @dataclass
@@ -136,6 +137,7 @@ class Offer:
     price_regex: str | None
     active: bool
     local_shipping: float | None = None  # store's shipping to a forwarder's warehouse (shipping_currency)
+    title: str | None = None  # the store's name for the listing, from the last check
 
 
 @dataclass
@@ -148,6 +150,8 @@ class PricePoint:
     in_stock: bool
     source: str
     listing_url: str | None = None  # the listing actually priced, when the offer is a search page
+    condition: str | None = None  # "Renewed", "Used - Like New"...; None for new
+    availability: str | None = None  # the store's stock wording at the time
 
 
 def now_utc() -> datetime:
@@ -192,12 +196,16 @@ class Database:
                 self.conn.execute("ALTER TABLE items ADD COLUMN weight_kg REAL")
             if "dims" not in item_cols:
                 self.conn.execute("ALTER TABLE items ADD COLUMN dims TEXT")
-            if "listing_url" not in cols:
-                self.conn.execute("ALTER TABLE prices ADD COLUMN listing_url TEXT")
+            for col in ("listing_url", "condition", "availability"):
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE prices ADD COLUMN {col} TEXT")
+            if "title" not in offer_cols:
+                self.conn.execute("ALTER TABLE offers ADD COLUMN title TEXT")
             if "local_shipping" not in offer_cols:
                 self.conn.execute("ALTER TABLE offers ADD COLUMN local_shipping REAL")
             for col, decl in (("weight_source", "TEXT"), ("dims_source", "TEXT"), ("specs_status", "TEXT"),
-                              ("muted", "INTEGER NOT NULL DEFAULT 0"), ("image_url", "TEXT")):
+                              ("muted", "INTEGER NOT NULL DEFAULT 0"), ("image_url", "TEXT"),
+                              ("description", "TEXT")):
                 if col not in item_cols:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {decl}")
             # lets offline clients replay queued price entries without creating duplicates
@@ -234,14 +242,15 @@ class Database:
 
     def update_item(self, item: Item, category: str | None = None, target_price: float | None = None,
                     weight_kg: float | None = None, dims: str | None = None, source: str = "manual",
-                    muted: bool | None = None, image_url: str | None = None):
+                    muted: bool | None = None, image_url: str | None = None, description: str | None = None):
         """Set the given fields; ``None`` leaves a field unchanged (see ``clear_item_field``).
 
         A weight or size set with ``source="manual"`` is never replaced by values read from store pages.
         """
         with self.conn:
             for col, value in (("category", category), ("target_price", target_price),
-                               ("weight_kg", weight_kg), ("dims", dims), ("image_url", image_url)):
+                               ("weight_kg", weight_kg), ("dims", dims), ("image_url", image_url),
+                               ("description", description)):
                 if value is not None:
                     self.conn.execute(f"UPDATE items SET {col} = ? WHERE id = ?", (value, item.id))
             if weight_kg is not None:
@@ -311,6 +320,10 @@ class Database:
         ).fetchone()
         return self._offer(row)
 
+    def set_offer_title(self, offer: Offer, title: str | None):
+        with self.conn:
+            self.conn.execute("UPDATE offers SET title = ? WHERE id = ?", (title, offer.id))
+
     def offers(self, item: Item, active_only: bool = True) -> list[Offer]:
         q = "SELECT * FROM offers WHERE item_id = ?" + (" AND active = 1" if active_only else "") + " ORDER BY id"
         return [self._offer(r) for r in self.conn.execute(q, (item.id,))]
@@ -334,14 +347,15 @@ class Database:
     # ---- prices ------------------------------------------------------------
     def add_price(self, offer: Offer, price: float, currency: str, shipping: float | None = None,
                   in_stock: bool = True, source: str = "manual", ts: datetime | None = None,
-                  client_id: str | None = None, listing_url: str | None = None) -> bool:
+                  client_id: str | None = None, listing_url: str | None = None, condition: str | None = None,
+                  availability: str | None = None) -> bool:
         """Returns False when ``client_id`` was already recorded (a replayed offline entry)."""
         with self.conn:
             cur = self.conn.execute(
                 "INSERT OR IGNORE INTO prices (offer_id, ts, price, currency, shipping, in_stock, source, client_id,"
-                " listing_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " listing_url, condition, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (offer.id, (ts or now_utc()).isoformat(), price, currency.upper(), shipping, int(in_stock), source,
-                 client_id, listing_url),
+                 client_id, listing_url, condition, availability),
             )
         return cur.rowcount == 1
 
@@ -349,7 +363,7 @@ class Database:
         rows = self.conn.execute("SELECT * FROM prices WHERE offer_id = ? ORDER BY ts", (offer.id,))
         return [
             PricePoint(r["offer_id"], datetime.fromisoformat(r["ts"]), r["price"], r["currency"], r["shipping"],
-                       bool(r["in_stock"]), r["source"], r["listing_url"])
+                       bool(r["in_stock"]), r["source"], r["listing_url"], r["condition"], r["availability"])
             for r in rows
         ]
 

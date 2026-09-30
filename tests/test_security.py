@@ -231,7 +231,7 @@ class HostileContentTest(unittest.TestCase):
     def test_store_patterns_follow_the_host_not_the_path(self):
         from hawksense.fetch import extract_store_specific
 
-        page = '<span class="a-price"><span class="a-offscreen">$12.00</span></span>'
+        page = '<div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">$12.00</span></span>'
         self.assertIsNotNone(extract_store_specific(page, "https://www.amazon.com/dp/X"))
         self.assertIsNone(extract_store_specific(page, "https://evil.example/amazon.html"))
 

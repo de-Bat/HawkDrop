@@ -45,6 +45,8 @@ class Extraction:
     specs: object | None = None  # hawksense.specs.Specs read from the same page, if any
     image: str | None = None  # a picture of the product, if the page named one
     condition: str | None = None  # "Renewed", "Pre-owned"... only when the listing is not new
+    description: str | None = None  # a short product description (the store's summary or first bullets)
+    availability: str | None = None  # the store's own stock wording: "In stock", "Only 3 left", "Currently unavailable"
 
 
 def fetch_html(url: str, timeout: float = 20.0, extra_headers: dict | None = None) -> str:
@@ -219,9 +221,12 @@ def extract_meta(page: str) -> Extraction | None:
 
 # host part -> [(marker, pattern matched within STORE_WINDOW characters after the marker)]
 _STORE_PATTERNS = {
+    # only the buy box: an unavailable product has none, and every other price on the page (carousels, other
+    # sellers, "customers also bought") belongs to a different product
     "amazon.": [
         ('id="corePrice', r'<span class="a-offscreen">([^<]{1,40})</span>'),
-        ('<span class="a-price', r'^[^"]{0,200}"[^>]{0,300}><span class="a-offscreen">([^<]{1,40})</span>'),
+        ('id="tp_price_block_total_price', r'<span class="a-offscreen">([^<]{1,40})</span>'),
+        ('id="priceblock_ourprice"', r'^[^>]{0,200}>([^<]{1,40})<'),
     ],
     "newegg.": [  # $<strong>220</strong><sup>.00</sup>; the first one is the item's buy box
         ('class="price-current',
@@ -252,7 +257,7 @@ def extract_store_specific(page: str, url: str) -> Extraction | None:
     return None
 
 
-_BLOCK_WORDS = r"captcha|robot check|access denied|just a moment|attention required|pardon our interruption"
+_BLOCK_WORDS = r"captcha|robot check|access denied|just a moment|attention required|pardon our interruption|_____tmd_____/punish"
 _BLOCK_TITLE = re.compile(r"<title[^>]{0,100}>[^<]{0,200}?(?:" + _BLOCK_WORDS + ")", re.I)
 
 
@@ -281,10 +286,30 @@ def extract_price(page: str, url: str = "", price_regex: str | None = None) -> E
     raise FetchError("no price found on the page - add --regex to the offer or record the price manually")
 
 
-def fetch_price(url: str, price_regex: str | None = None) -> Extraction:
+class OutOfStock(FetchError):
+    """The page says the product can't be bought right now, and shows no price for it."""
+
+    def __init__(self, availability: str, details: dict | None = None):
+        super().__init__(f"out of stock ({availability})")
+        self.availability, self.details = availability, details or {}
+
+
+def read_product(page: str, url: str, price_regex: str | None = None) -> Extraction:
+    """Price plus everything around it (title, description, picture, stock, condition, size) from one page."""
+    from hawksense.product_info import enrich, in_stock_from, read_details
     from hawksense.specs import extract_specs
 
-    page = fetch_html(url)
-    ex = extract_price(page, url, price_regex)
+    try:
+        ex = extract_price(page, url, price_regex)
+    except FetchError:
+        details = read_details(page, url)
+        if (avail := details.get("availability")) and in_stock_from(avail) is False:
+            raise OutOfStock(avail, details) from None
+        raise
+    enrich(ex, page, url)
     ex.specs = extract_specs(page)
     return ex
+
+
+def fetch_price(url: str, price_regex: str | None = None) -> Extraction:
+    return read_product(fetch_html(url), url, price_regex)

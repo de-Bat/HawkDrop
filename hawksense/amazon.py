@@ -63,29 +63,12 @@ def search_candidates(query: str, site: str = "amazon.com", limit: int = 20) -> 
     return parse_search_candidates(fetch_html(search_url(query, site)), site, limit)
 
 
-_TITLE_ID = re.compile(r'id="productTitle"[^>]*>(.*?)</span>', re.S)
-_PAGE_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
-_LANDING = re.compile(r'"hiRes":"(https://[^"]+)"|id="landingImage"[^>]*data-a-dynamic-image="\{&quot;(https://[^&]+)&quot;', re.S)
-
-
 def listing_from_url(url: str) -> Extraction:
-    """The one product a pasted link points at: title, price, picture and (when the page lists them) size/weight."""
-    from hawksense.fetch import extract_price
-    from hawksense.specs import extract_specs
+    """The one product a pasted link points at: price, title, description, picture, stock, condition, size."""
+    from hawksense.fetch import read_product
 
-    page = fetch_html(url)
-    ex = extract_price(page, url)
-    title = None
-    if m := _TITLE_ID.search(page):
-        title = html_lib.unescape(_TAGS.sub(" ", m.group(1))).strip()
-    elif m := _PAGE_TITLE.search(page):
-        title = re.sub(r"^(?:Amazon\.[a-z.]+\s*:\s*)", "", html_lib.unescape(m.group(1)).strip())
-    if m := _LANDING.search(page):
-        ex.image = html_lib.unescape(m.group(1) or m.group(2))
-    ex.title = title or ex.title
+    ex = read_product(fetch_html(url), url)
     ex.url = ex.url or url
-    if ex.specs is None:
-        ex.specs = extract_specs(page)
     return ex
 
 

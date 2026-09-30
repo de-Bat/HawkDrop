@@ -11,7 +11,7 @@ from hawksense import amazon, ebay
 from hawksense.currency import FX
 from hawksense.db import Database, Item, Offer, PricePoint
 from hawksense.ebay import EbaySource, is_ebay
-from hawksense.fetch import Extraction, FetchError, fetch_html, fetch_price
+from hawksense.fetch import Extraction, FetchError, OutOfStock, fetch_html, fetch_price
 from hawksense.forecast import Advice, Settings, advise
 from hawksense.forwarders import FORWARDERS, Account, Forwarder, Route, parse_dims
 from hawksense.landed import Destination, LandedCost, forwarded_cost, landed_cost
@@ -204,6 +204,18 @@ class Tracker:
                     ex = amazon.price_search_page(offer.url)
                 else:
                     ex = fetch_price(offer.url, offer.price_regex)
+            except OutOfStock as exc:
+                # nothing to buy right now: keep the last price but mark it out of stock, so the store stays listed
+                last = self.db.prices(offer)[-1:] or None
+                if last:
+                    p = last[0]
+                    self.db.add_price(offer, p.price, p.currency, p.shipping, False, source="availability",
+                                      listing_url=p.listing_url, condition=p.condition,
+                                      availability=exc.availability)
+                if exc.details.get("title"):
+                    self.db.set_offer_title(offer, exc.details["title"])
+                results.append(CheckResult(offer, store, error=f"{store.name}: {exc}"))
+                continue
             except FetchError as exc:
                 results.append(CheckResult(offer, store, error=str(exc)))
                 continue
@@ -213,11 +225,16 @@ class Tracker:
             ex.currency = (ex.currency or store.currency).upper()
             listing = ex.url if ex.url and ex.url != offer.url else None
             self.db.add_price(offer, ex.price, ex.currency, ex.shipping, ex.in_stock, source=ex.method,
-                              listing_url=listing)
+                              listing_url=listing, condition=ex.condition, availability=ex.availability)
+            if ex.title and ex.title != offer.title:
+                self.db.set_offer_title(offer, ex.title)
             self._save_specs(item, store.name, ex.url or offer.url, ex.specs)
             if ex.image and not item.image_url:
                 self.db.update_item(item, image_url=ex.image)
                 item.image_url = ex.image
+            if ex.description and not item.description:
+                self.db.update_item(item, description=ex.description)
+                item.description = ex.description
             results.append(CheckResult(offer, store, ex))
         if any(r.extraction for r in results):
             self.update_specs(item)

@@ -132,6 +132,13 @@ function checkFailures(it) {
   return html`<section class="card"><h3>Last check</h3>${bad.map((b) => failedNote(`${b.store} failed`, b.error))}</section>`;
 }
 
+// the store's own wording when it says something useful ("Only 3 left in stock"), else just out-of-stock
+function stockNote(q) {
+  const a = (q.availability || '').trim();
+  if (!q.in_stock) return ` · ${a && !/^in stock$/i.test(a) ? a.toLowerCase() : 'out of stock'}`;
+  return a && !/^(in stock|available)$/i.test(a) ? ` · ${a}` : '';
+}
+
 function shippingNote(r) {
   if (r.shipping == null) return ' · shipping unknown';
   if (r.shipping === 0) return ' · free shipping';
@@ -397,7 +404,8 @@ function quotesSection(it) {
       <details data-key="quote-${q.offer_id}">
         <summary>
           <div class="q-store">${flag(q.country)} ${q.store}${i === 0 && q.in_stock ? html` <span class="chip best-chip">best</span>` : ''}
-            <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${q.in_stock ? '' : ' · out of stock'}</div>
+            ${q.title ? html`<div class="small q-title" title="${q.title}">${q.title}</div>` : ''}
+            <div class="small muted">${money(q.price, q.currency)} · ${ago(q.seen)}${stockNote(q)}${q.condition ? html` · <span class="chip tiny warn">${q.condition}</span>` : ''}</div>
             ${l.route && l.route !== 'direct' ? html`<div class="small via">${l.route_label}</div>` : ''}</div>
           <div class="q-total">${l.hold ? 'on hold' : money(l.total)}<div class="small muted">${l.hold ? 'set the weight' : 'delivered'}</div></div>
         </summary>
@@ -411,7 +419,7 @@ function quotesSection(it) {
     </li>`;
   });
   const unpriced = it.offers.filter((o) => !o.has_prices).map((o) => html`<li class="quote unpriced">
-      <div class="q-store">${o.store}<div class="small muted">${o.pending ? 'waiting to sync' : 'no price yet'}</div></div>
+      <div class="q-store">${o.store}${o.title ? html`<div class="small q-title" title="${o.title}">${o.title}</div>` : ''}<div class="small muted">${o.pending ? 'waiting to sync' : 'no price yet'}</div></div>
       ${o.id ? html`<button type="button" class="link danger small" data-action="remove-offer" data-offer="${o.id}">remove</button>` : ''}
     </li>`);
   const pend = (it.pending_prices || []).map((p) => html`<li class="quote pending">
@@ -471,6 +479,7 @@ function viewItem(id) {
       <div class="grow"><h1>${it.name}</h1><div class="small muted">${it.category}${it.target_price ? html` · target ${money(it.target_price)}` : ''}</div></div>
       <button class="icon-btn" type="button" data-action="edit-item" aria-label="Edit">${icon('edit')}</button>
     </div>
+    ${it.description ? html`<details class="item-desc small"><summary class="muted">About this product</summary><p>${it.description}</p></details>` : ''}
     <div class="actions">
       <button class="btn primary" type="button" data-action="log-price">${icon('tag')} Log price</button>
       <button class="btn" type="button" data-action="add-offer">${icon('store')} Add store</button>

@@ -33,8 +33,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from hawksense.fetch import Extraction, FetchError, extract_price, fetch_html, guess_currency, parse_number
-from hawksense.specs import extract_specs, specs_from_pairs
+from hawksense.fetch import Extraction, FetchError, fetch_html, guess_currency, parse_number, read_product
+from hawksense.specs import specs_from_pairs
 from hawksense.vault import Vault, VaultError
 
 API_ROOT = "https://api.ebay.com"
@@ -178,10 +178,15 @@ class EbayApi:
             raise EbayError("eBay API: listing has no fixed price (auction?)")
         status = " ".join(a.get("estimatedAvailabilityStatus", "") for a in data.get("estimatedAvailabilities") or [])
         aspects = [(a.get("name", ""), a.get("value", "")) for a in data.get("localizedAspects") or []]
-        return Extraction(price, currency, "OUT_OF_STOCK" not in status or "IN_STOCK" in status,
+        in_stock = "OUT_OF_STOCK" not in status or "IN_STOCK" in status
+        left = next((a.get("estimatedAvailableQuantity") for a in data.get("estimatedAvailabilities") or []
+                     if a.get("estimatedAvailableQuantity") is not None), None)
+        return Extraction(price, currency, in_stock,
                           _shipping(data.get("shippingOptions"), currency), data.get("title"), "ebay-api",
                           url=data.get("itemWebUrl"), specs=specs_from_pairs(aspects, "ebay item specifics"),
-                          image=(data.get("image") or {}).get("imageUrl"))
+                          image=(data.get("image") or {}).get("imageUrl"), condition=_condition(data.get("condition")),
+                          description=(data.get("shortDescription") or "")[:400] or None,
+                          availability=("Out of stock" if not in_stock else f"{left} available" if left else "In stock"))
 
     def search(self, query: str, condition: str | None = None, marketplace: str = "EBAY_US") -> Extraction:
         return _cheapest(self.search_candidates(query, condition, marketplace), query)
@@ -361,9 +366,8 @@ class EbaySource:
             page = _fetch_ebay_page(url)
             if search:
                 return parse_search_page(page, currency)
-            ex = extract_price(page, url, price_regex)
+            ex = read_product(page, url, price_regex)
             ex.currency = ex.currency or currency
-            ex.specs = extract_specs(page)
             return ex
         except FetchError as exc:
             if api_error:

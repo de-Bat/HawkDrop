@@ -66,7 +66,8 @@ _DIMS_LABELS = [
     (re.compile(r"(?:item )?(?:package|shipping|box|parcel|boxed) (?:dimensions|size)(?: l ?x ?w ?x ?h)?"
                 r"|verpackungsabmessungen|packungsabmessungen|dimensions (?:du colis|de l['’]emballage|d['’]exp[eé]dition)"
                 r"|dimensiones (?:del|de) (?:paquete|embalaje|env[ií]o|bulto)|מידות (?:ה?אריזה|משלוח)"), "package"),
-    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)|produktabmessungen|artikelabmessungen|abmessungen"
+    (re.compile(r"(?:product |item |overall )?(?:dimensions|measurements|size)(?: (?:l ?x ?w ?x ?h|w ?x ?h ?x ?d|d ?x ?w ?x ?h))?"
+                r"|produktabmessungen|artikelabmessungen|abmessungen"
                 r"|dimensions(?: (?:du produit|de l['’]article|du produit))?|dimensiones(?: (?:del|de) (?:art[ií]culo|producto))?|tama[ñn]o(?: l ?x ?w ?x ?h| w ?x ?h ?x ?d)?"
                 r"|מידות(?: ה?מוצר)?"), "item"),
 ]

@@ -752,18 +752,113 @@ const SETTINGS_PAGES = [
   }],
   ['stores', 'Stores & shipping', 'store', () => 'Shipping costs and policies per store'],
   ['ebay', 'eBay', 'tag', () => ((settingsSection('ebay') || {}).configured ? 'API keys set up' : 'Reading public pages')],
+  ['keepa', 'Keepa (Amazon data)', 'tag', () => ((settingsSection('keepa') || {}).configured ? 'API key set up' : 'Reading Amazon pages')],
   ['general', 'General & access', 'gear', () => (state.snapshot.meta ? `Deliver to ${state.snapshot.meta.destination.name}` : '')],
   ['device', 'Sync, device & data', 'share', () => `${state.outbox.length ? `${state.outbox.length} pending · ` : ''}synced ${ago(state.lastSync)}`],
 ];
+
+// ---- search in settings ---------------------------------------------------------------------
+
+let settingsQuery = '';
+const CHANNEL_KEYS = ['telegram', 'whatsapp', 'ntfy', 'email', 'webhook'];
+// things on pages that are not a labelled field: [page, title, words people would type]
+const SETTINGS_EXTRAS = [
+  ['general', 'Access token', 'server token password login --token'],
+  ['device', 'Install on iPhone / iPad', 'home screen safari offline app pwa'],
+  ['device', 'Load demo item', 'example sample data'],
+  ['device', 'Clear data on this device', 'reset wipe offline copy cache'],
+  ['device', 'Pending changes', 'outbox sync queue rejected'],
+  ['notifications', 'Which events go to which channel', 'subscribe alerts price drop sale'],
+  ['rates', 'Rule changes to review', 'tax vat duty forwarder rates pending rules feed'],
+];
+
+// every setting worth finding: {page, title, where, hay}; values are never indexed (secrets stay secret)
+function settingsIndex() {
+  const pages = new Map(SETTINGS_PAGES.map(([key, title]) => [key, title]));
+  const out = SETTINGS_PAGES.map(([key, title]) => ({ page: key, title, where: 'Settings', hay: title }));
+  const st = state.snapshot.settings;
+  for (const sec of (st && st.sections) || []) {
+    const page = CHANNEL_KEYS.includes(sec.key) ? 'notifications' : sec.key;
+    const where = pages.has(page) ? (page === sec.key ? pages.get(page) : `${pages.get(page)} › ${sec.title}`) : sec.title;
+    out.push({ page, title: sec.title, where: pages.get(page) || 'Settings', hay: `${sec.title} ${sec.description || ''}` });
+    for (const f of sec.fields) {
+      out.push({ page, title: f.label, where, hay: `${f.label} ${f.help || ''} ${sec.title} ${f.path}` });
+    }
+  }
+  if (st) {
+    const fieldWords = (st.store_fields || []).map((f) => f.label).join(' ');
+    for (const store of st.stores || []) {
+      out.push({ page: 'stores', store: store.key, title: store.name, where: 'Stores & shipping', hay: `${store.name} ${store.key} ${store.currency} ${fieldWords}` });
+    }
+    for (const f of st.store_fields || []) {
+      out.push({ page: 'stores', title: f.label, where: 'Stores & shipping', hay: `${f.label} ${f.help || ''} store shipping policy` });
+    }
+  }
+  for (const svc of (state.snapshot.forwarders && state.snapshot.forwarders.services) || []) {
+    out.push({ page: 'forwarders', title: svc.name, where: 'Package forwarders', hay: `${svc.name} ${svc.key} forwarder warehouse address` });
+  }
+  for (const [page, title, words] of SETTINGS_EXTRAS) {
+    out.push({ page, title, where: pages.get(page) || 'Settings', hay: `${title} ${words}` });
+  }
+  return out;
+}
+
+function searchSettings(query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const scored = [];
+  for (const e of settingsIndex()) {
+    const hay = e.hay.toLowerCase();
+    if (!words.every((w) => hay.includes(w))) continue;
+    const title = e.title.toLowerCase();
+    scored.push([words.every((w) => title.includes(w)) ? 0 : 1, title.startsWith(words[0]) ? 0 : 1, e]);
+  }
+  scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const seen = new Set();
+  return scored.map((x) => x[2]).filter((e) => {  // the same setting can be reached twice (page and field)
+    const key = `${e.page}|${e.title}`;
+    return seen.has(key) ? false : (seen.add(key), true);
+  }).slice(0, 12);
+}
+
+function settingsResults(query) {
+  const found = searchSettings(query);
+  if (!found.length) return html`<p class="small muted center search-none">No settings match “${query.trim()}”.</p>`;
+  return found.map((e) => html`<a class="settings-row" href="#/settings/${e.page}" ${e.store ? html`data-store="${e.store}"` : ''}>
+      <div class="grow"><b>${e.title}</b><div class="small muted">${e.where}</div></div>${icon('back', 'icon flip')}</a>`);
+}
+
+function updateSettingsSearch() {
+  const results = document.getElementById('settings-results');
+  if (!results) return;
+  const q = settingsQuery.trim();
+  results.innerHTML = q ? str(settingsResults(q)) : '';
+  results.hidden = !q;
+  for (const id of ['settings-main', 'settings-foot']) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !!q;
+  }
+  const clear = document.getElementById('settings-search-clear');
+  if (clear) clear.hidden = !settingsQuery;
+}
 
 function viewSettings() {
   const issues = settingsIssues();
   const rows = SETTINGS_PAGES.map(([key, title, ic, sub]) => html`<a class="settings-row ${issues.sections[key] ? 'needs-attention' : ''}" href="#/settings/${key}">
       ${icon(ic)}<div class="grow"><b>${title}${issues.sections[key] ? dot() : ''}</b><div class="small muted">${sub()}</div></div>${icon('back', 'icon flip')}</a>`);
+  const q = settingsQuery.trim();
   return html`<h1 class="page-title">Settings</h1>
-    <div class="row between card slim"><span>Sync</span>${statusPill()}</div>
-    <nav class="card settings-nav">${rows}</nav>
-    <p class="small muted center">Settings saved here are stored on your HawkSense server and override config.toml.</p>`;
+    <div class="search-bar">
+      ${icon('search')}
+      <input id="settings-search" type="search" placeholder="Search settings…" autocomplete="off" value="${settingsQuery}" aria-label="Search settings">
+      <button type="button" class="icon-btn clear" id="settings-search-clear" data-action="clear-settings-search" aria-label="Clear search" ${settingsQuery ? '' : 'hidden'}>${icon('close')}</button>
+    </div>
+    <nav class="card settings-nav" id="settings-results" ${q ? '' : 'hidden'}>${q ? settingsResults(q) : ''}</nav>
+    <div id="settings-main" ${q ? 'hidden' : ''}>
+      <div class="row between card slim"><span>Sync</span>${statusPill()}</div>
+      <nav class="card settings-nav">${rows}</nav>
+    </div>
+    <p class="small muted center" id="settings-foot" ${q ? 'hidden' : ''}>Settings saved here are stored on your HawkSense server and override config.toml.</p>`;
 }
 
 function storesPage() {
@@ -844,6 +939,7 @@ function settingsPage(key) {
     case 'advice': return html`${back}${sectionForm('advice')}`;
     case 'stores': return html`${back}${storesPage()}`;
     case 'ebay': return html`${back}${sectionForm('ebay')}`;
+    case 'keepa': return html`${back}${sectionForm('keepa')}`;
     case 'general':
       return html`${back}${sectionForm('general')}
         <form class="card form" id="token-form">
@@ -1182,6 +1278,13 @@ async function onClick(ev) {
       filterItemCards();
       break;
     }
+    case 'clear-settings-search': {
+      settingsQuery = '';
+      const input = document.getElementById('settings-search');
+      if (input) { input.value = ''; input.focus(); }
+      updateSettingsSearch();
+      break;
+    }
     case 'search-products': {
       const form = document.getElementById('add-form');
       const name = form.querySelector('[name=name]').value.trim();
@@ -1419,6 +1522,11 @@ document.addEventListener('submit', onSubmit);
 document.addEventListener('input', (ev) => {
   const f = ev.target.closest('#view form'); if (f && f.id !== 'add-form') f.dataset.dirty = '1';
   if (ev.target.id === 'item-search') { itemSearch = ev.target.value; filterItemCards(); }
+  if (ev.target.id === 'settings-search') { settingsQuery = ev.target.value; updateSettingsSearch(); }
+});
+document.addEventListener('click', (ev) => {
+  const hit = ev.target.closest('#settings-results a[data-store]');
+  if (hit) storesPage.selected = hit.dataset.store;  // land on the store you searched for
 });
 document.addEventListener('change', (ev) => {
   if (ev.target.id === 'store-pick') { storesPage.selected = ev.target.value; render({ force: true }); }

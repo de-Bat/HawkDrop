@@ -119,6 +119,10 @@ SECTIONS: tuple[Section, ...] = (
         Field("ebay.client_id", "App ID (client id)", env="HAWKSENSE_EBAY_CLIENT_ID"),
         Field("ebay.client_secret", "Cert ID (client secret)", "secret", env="HAWKSENSE_EBAY_CLIENT_SECRET"),
     )),
+    Section("keepa", "Keepa (Amazon data)", "Optional, paid (keepa.com, API access). Amazon prices, stock, sizes and "
+            "years of price history from Keepa instead of Amazon's pages, which often block servers.", (
+        Field("keepa.key", "API key", "secret", env="HAWKSENSE_KEEPA_KEY"),
+    )),
 )
 
 FIELDS: dict[str, Field] = {f.path: f for s in SECTIONS for f in s.fields}
@@ -209,7 +213,7 @@ def effective(db, file_cfg: Config) -> Config:
     """config.toml with the app's settings on top."""
     ui, _ = decrypted(db, load(db))
     merged = {name: _merge(getattr(file_cfg, name) or {}, ui.get(name) or {})
-              for name in ("destination", "advisor", "stores", "server", "forwarders", "ebay", "rules", "notify")}
+              for name in ("destination", "advisor", "stores", "server", "forwarders", "ebay", "keepa", "rules", "notify")}
     if str(merged["rules"].get("feed_url", "")).strip().lower() == "off":
         merged["rules"]["feed_url"] = ""
     return replace(file_cfg, **merged, schedule=ui.get("schedule") or {})
@@ -335,7 +339,7 @@ def view(db, file_cfg: Config, env: dict | None = None, startup: dict | None = N
     stored = load(db)
     ui, unreadable = decrypted(db, stored)
     file_tree = {name: getattr(file_cfg, name) or {} for name in
-                 ("destination", "advisor", "stores", "forwarders", "ebay", "rules", "notify")}
+                 ("destination", "advisor", "stores", "forwarders", "ebay", "keepa", "rules", "notify")}
     file_tree["schedule"] = startup or {}
     sections = []
     for s in SECTIONS:
@@ -369,6 +373,8 @@ def view(db, file_cfg: Config, env: dict | None = None, startup: dict | None = N
 
             cls = next(c for c in CHANNEL_TYPES if c.key == s.key)
             configured = cls(effective(db, file_cfg).notify.get(s.key) or {}, None, env).configured
+        elif s.key == "keepa":
+            configured = bool(env.get("HAWKSENSE_KEEPA_KEY") or effective(db, file_cfg).keepa.get("key"))
         elif s.key == "ebay":
             eff = effective(db, file_cfg).ebay
             configured = bool((env.get("HAWKSENSE_EBAY_CLIENT_ID") or eff.get("client_id"))

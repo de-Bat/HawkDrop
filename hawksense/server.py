@@ -218,7 +218,12 @@ class Api:
         if re.match(r"https?://", q, re.I):
             # a pasted product link: show that listing first, then look for the same product elsewhere by its name
             try:
-                ex = amazon.listing_from_url(q)
+                try:
+                    ex = t.keepa.fetch(q) if t.keepa.covers(q) else amazon.listing_from_url(q)
+                except FetchError:
+                    if not t.keepa.covers(q):
+                        raise
+                    ex = amazon.listing_from_url(q)  # Keepa out of tokens / unreachable: read the page
                 pasted = api.search_candidate(ex, label=t.store_for(q).name)
                 pasted["url"] = q
                 results.append(pasted)

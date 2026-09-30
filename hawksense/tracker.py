@@ -12,6 +12,7 @@ from hawksense.currency import FX
 from hawksense.db import Database, Item, Offer, PricePoint
 from hawksense.ebay import EbaySource, is_ebay
 from hawksense.fetch import Extraction, FetchError, OutOfStock, fetch_html, fetch_price
+from hawksense.keepa import KeepaSource
 from hawksense.forecast import Advice, Settings, advise
 from hawksense.forwarders import FORWARDERS, Account, Forwarder, Route, parse_dims
 from hawksense.landed import Destination, LandedCost, forwarded_cost, landed_cost
@@ -62,12 +63,13 @@ class CheckResult:
 class Tracker:
     def __init__(self, db: Database, fx: FX, dest: Destination, settings: Settings | None = None,
                  store_overrides: dict | None = None, forwarders: dict[str, Forwarder] | None = None,
-                 ebay: EbaySource | None = None):
+                 ebay: EbaySource | None = None, keepa: KeepaSource | None = None):
         self.db, self.fx, self.dest = db, fx, dest
         self.settings = settings or Settings()
         self.store_overrides = store_overrides or {}
         self.forwarders = forwarders if forwarders is not None else dict(FORWARDERS)
         self.ebay = ebay or EbaySource(db=db, dest_code=dest.code)
+        self.keepa = keepa or KeepaSource({}, env={})  # off unless configured (from_config)
         self._accounts: list[Account] | None = None
         self.config = None  # the Config this tracker was built from (from_config)
         self.notifier = Notifier(db)
@@ -79,7 +81,7 @@ class Tracker:
 
         dest, forwarders = rules.build(db, cfg, dest_code)
         t = cls(db, fx, dest, cls.settings_from(cfg.advisor), cfg.stores, forwarders,
-                EbaySource(cfg.ebay, db, dest.code))
+                EbaySource(cfg.ebay, db, dest.code), KeepaSource(cfg.keepa))
         t.config = cfg
         t.notifier = Notifier(db, cfg.notify)
         return t
@@ -200,6 +202,8 @@ class Tracker:
             try:
                 if is_ebay(offer.url):
                     ex = self.ebay.fetch(offer.url, offer.price_regex)
+                elif self.keepa.covers(offer.url) and not offer.price_regex:
+                    ex = self._fetch_keepa(item, offer)
                 elif amazon.search_query(offer.url) and not offer.price_regex:
                     ex = amazon.price_search_page(offer.url)
                 else:
@@ -239,6 +243,29 @@ class Tracker:
         if any(r.extraction for r in results):
             self.update_specs(item)
         return results
+
+    def _fetch_keepa(self, item: Item, offer: Offer) -> Extraction:
+        """An Amazon product through Keepa (the page if Keepa fails). The first time a store is checked, its
+        past prices are filled in from Keepa's history too, so the buy-timing advice has data from day one."""
+        try:
+            if self.db.prices(offer):
+                return self.keepa.fetch(offer.url)
+            ex, past, out = self.keepa.fetch_with_history(offer.url)
+        except OutOfStock:
+            raise
+        except FetchError as keepa_error:
+            try:
+                return fetch_price(offer.url)
+            except FetchError as page_error:
+                raise FetchError(f"{keepa_error}; page: {page_error}") from None
+        store = self.store_for(offer)
+        today = datetime.now(timezone.utc).date()
+        for ts, price, shipping in past:
+            if ts.date() < today:  # today's price comes from the current offer below
+                self.db.add_price(offer, price, store.currency, shipping, True, source="keepa-history", ts=ts)
+        if out is not None:
+            raise out
+        return ex
 
     # ---- weight / size --------------------------------------------------------------------
     def _save_specs(self, item: Item, source: str, url: str, specs) -> None:

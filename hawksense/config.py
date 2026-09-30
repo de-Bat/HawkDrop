@@ -32,6 +32,9 @@ Example::
     client_id = "..."
     client_secret = "..."
 
+    [keepa]                          # optional, paid: Amazon prices, history and sizes without reading pages
+    key = "..."
+
     [rules]                          # automatic tax/forwarder rule updates (hawksense/rules.py)
     feed_url = "..."                 # "" turns the feed off
 
@@ -70,6 +73,7 @@ class Config:
     server: dict = field(default_factory=dict)
     forwarders: dict = field(default_factory=dict)
     ebay: dict = field(default_factory=dict)
+    keepa: dict = field(default_factory=dict)
     rules: dict = field(default_factory=dict)
     notify: dict = field(default_factory=dict)
     schedule: dict = field(default_factory=dict)  # set in the app only (hawksense.settings)
@@ -82,8 +86,8 @@ def load_config(path: Path | None = None) -> Config:
     with open(path, "rb") as f:
         data = tomllib.load(f)
     return Config(data.get("destination", {}), data.get("advisor", {}), data.get("stores", {}),
-                  data.get("server", {}), data.get("forwarders", {}), data.get("ebay", {}), data.get("rules", {}),
-                  data.get("notify", {}))
+                  data.get("server", {}), data.get("forwarders", {}), data.get("ebay", {}), data.get("keepa", {}),
+                  data.get("rules", {}), data.get("notify", {}))
 
 
 @dataclass

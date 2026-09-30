@@ -99,6 +99,27 @@ client_secret = "PRD-..."
 
 (or set `HAWKSENSE_EBAY_CLIENT_ID` / `HAWKSENSE_EBAY_CLIENT_SECRET`).
 
+### Amazon through Keepa (optional, paid)
+
+Amazon often answers servers with a captcha. With a [Keepa](https://keepa.com/#!api) API key,
+Amazon product links (amazon.com, .co.uk, .de, .fr, .it, .es, .ca, .co.jp) are read from Keepa
+instead:
+
+- the buy-box price with shipping, stock and condition
+- title, features and pictures
+- the boxed size and weight, which Amazon's pages often leave out
+- up to two years of daily prices, filled in the first time a store is checked, so the buy/wait
+  advice has history from day one
+
+```toml
+[keepa]
+key = "..."
+```
+
+(or set `HAWKSENSE_KEEPA_KEY`, or enter it in the app under **Settings**). Each product lookup
+costs Keepa tokens. If Keepa fails (out of tokens, unreachable), HawkSense reads the Amazon page
+as before. Amazon search pages (from "search all stores") are still read directly.
+
 ## Package forwarders
 
 Many stores don't ship to Israel, or charge a lot for it. With a package forwarder you get a
@@ -547,7 +568,7 @@ Nearly everything can be set in the app under **Settings**:
 - automatic check intervals, the rules feed and rule sources
 - buy/wait advice settings
 - per-store shipping policies
-- eBay API keys
+- eBay API keys and the Keepa key
 
 Some rules for settings saved in the app:
 

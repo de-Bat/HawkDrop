@@ -58,6 +58,20 @@ const BASE = (process.env.HAWKSENSE_URL || 'http://localhost:8799').replace(/\/$
   await page.waitForSelector('#store-pick');
   assert.equal(await page.$eval('#store-pick', (e) => e.value), 'newegg');
 
+  // 4b. typos and other words for the same thing still find the setting (first result shown)
+  await page.goto(BASE + '/#/settings');
+  await page.waitForSelector('#settings-search');
+  const first = async (q) => { await type(q); return (await titles())[0] || ''; };
+  assert.match(await first('kepa'), /Keepa/);
+  assert.match(await first('telgram'), /Telegram/);
+  assert.match(await first('pasword'), /Password/);
+  assert.match(await first('acess token'), /Access token/);
+  assert.match(await first('interval'), /every/i);
+  assert.match(await first('how often'), /checks/i);
+  assert.match(await first('shiping'), /shipping/i);
+  assert.match(await first('dealtass'), /Dealtas/);
+  assert.deepEqual(await (async () => { await type('qzxqzx'); return titles(); })(), []);
+
   // 5. clear button restores the list
   await page.goto('' + BASE + '/#/settings');
   await page.waitForSelector('#settings-search');

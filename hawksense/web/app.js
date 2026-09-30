@@ -803,19 +803,84 @@ function settingsIndex() {
   return out;
 }
 
+// Words people type for what the settings call something else: each expands to extra words to match.
+const SETTINGS_SYNONYMS = {
+  interval: 'every hours schedule', frequency: 'every hours schedule', often: 'every hours schedule',
+  schedule: 'every hours check', automatic: 'schedule check every', auto: 'schedule check every',
+  password: 'token secret key', secret: 'token key password', apikey: 'api key token',
+  login: 'token access', auth: 'token access key',
+  mail: 'email smtp', smtp: 'email', sms: 'whatsapp phone', text: 'whatsapp telegram phone',
+  phone: 'whatsapp number', push: 'ntfy notifications', alert: 'notifications notify', alerts: 'notifications',
+  notify: 'notifications', notification: 'notifications alerts', message: 'notifications telegram whatsapp',
+  tax: 'vat duty rates', taxes: 'vat duty rates', customs: 'duty vat', import: 'vat duty customs',
+  country: 'destination deliver', address: 'forwarder warehouse deliver', delivery: 'shipping deliver',
+  shipping: 'delivery stores', postage: 'shipping', courier: 'clearance forwarder shipping',
+  amazon: 'keepa', price: 'check prices', prices: 'check', wait: 'advice buy', buy: 'advice wait',
+  advice: 'buy wait', sync: 'device offline', offline: 'device sync cache',
+  reset: 'clear data', delete: 'clear remove', wipe: 'clear data',
+};
+
+// Optimal-string-alignment distance (a swap of two letters counts as one edit), bailing out past ``max``.
+function editDistance(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2 = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur.push(v);
+      if (v < best) best = v;
+    }
+    if (best > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// How well one typed word is found in a setting: 1 exact (substring), less for a typo, 0 not at all.
+function wordMatch(word, hay, hayWords) {
+  if (hay.includes(word)) return 1;
+  if (word.length < 4) return 0;  // too short to guess at
+  const allowed = word.length <= 5 ? 1 : 2;
+  let best = 0;
+  for (const w of hayWords) {
+    if (w.length < 3) continue;
+    // compare with the same-length start of the word too, so a half-typed, misspelled word still matches
+    const d = Math.min(editDistance(word, w, allowed), w.length > word.length ? editDistance(word, w.slice(0, word.length), allowed) : allowed + 1);
+    if (d <= allowed) best = Math.max(best, 0.75 - 0.2 * d);
+  }
+  return best;
+}
+
 function searchSettings(query) {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   if (!words.length) return [];
   const scored = [];
   for (const e of settingsIndex()) {
     const hay = e.hay.toLowerCase();
-    if (!words.every((w) => hay.includes(w))) continue;
-    const title = e.title.toLowerCase();
-    scored.push([words.every((w) => title.includes(w)) ? 0 : 1, title.startsWith(words[0]) ? 0 : 1, e]);
+    const hayWords = [...new Set(hay.split(/[^a-z0-9]+/).filter(Boolean))];
+    const titleLow = e.title.toLowerCase();
+    const titleWords = titleLow.split(/[^a-z0-9]+/).filter(Boolean);
+    let total = 0;
+    let ok = true;
+    for (const word of words) {
+      let best = wordMatch(word, hay, hayWords);
+      if (best < 1 && SETTINGS_SYNONYMS[word]) {  // any of the synonym's words counts, at half weight
+        best = Math.max(best, 0.5 * Math.max(...SETTINGS_SYNONYMS[word].split(' ').map((x) => wordMatch(x, hay, hayWords))));
+      }
+      if (best <= 0) { ok = false; break; }
+      total += best + 0.6 * wordMatch(word, titleLow, titleWords);  // matching the title counts most
+    }
+    if (ok) scored.push([total + (titleLow.startsWith(words[0]) ? 0.3 : 0), e]);
   }
-  scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  scored.sort((x, y) => y[0] - x[0]);
   const seen = new Set();
-  return scored.map((x) => x[2]).filter((e) => {  // the same setting can be reached twice (page and field)
+  return scored.map((x) => x[1]).filter((e) => {  // the same setting can be reached twice (page and field)
     const key = `${e.page}|${e.title}`;
     return seen.has(key) ? false : (seen.add(key), true);
   }).slice(0, 12);
